@@ -23,18 +23,6 @@ const pillars = [
       'Cost review, reporting & reconciliation',
     ],
   },
-  {
-    tag: 'Construction Management',
-    title: 'Owner-side leadership, start to finish.',
-    body:
-      'Hands-on management that keeps schedule, budget, and quality aligned with your goals — from program planning through closeout.',
-    points: [
-      'Program, project & construction management',
-      "Owner's representation",
-      'Alternative delivery consulting',
-      'Change-order review & staff augmentation',
-    ],
-  },
 ];
 
 // Client-care commitments — Pillar 1 of DCW's 2026–2036 strategic plan
@@ -88,20 +76,19 @@ const clients = [
 
 <Layout
   title="DCW Cost Management"
-  description="Drew Collaborative Works — independent, women-owned and employee-owned cost and construction management serving Seattle and Portland since 2012. On the owner's side of the table, 400+ projects a year."
+  description="Drew Collaborative Works — independent, women-owned and employee-owned cost management serving Seattle and Portland since 2012. On the owner's side of the table, 400+ projects a year."
 >
   <!-- ============ HERO ============ -->
   <!-- To use a real DCW photo, drop it in /public and set
        style="--hero-img:url('/your-photo.jpg')" on .hero below. -->
   <section class="hero">
     <div class="container hero-inner">
-      <span class="hero-eyebrow">Independent cost &amp; construction management</span>
+      <span class="hero-eyebrow">Independent cost management</span>
       <h1>On the owner's side, start to&nbsp;finish</h1>
       <p class="hero-lead">
         DCW is an independent, women-owned and employee-owned firm delivering
-        design-based cost consulting and owner-side construction management
-        across the Pacific Northwest. Collaboration is in our name — and your
-        budget is our only agenda.
+        design-based cost consulting across the Pacific Northwest. Collaboration
+        is in our name — and your budget is our only agenda.
       </p>
       <div class="hero-cta">
         <a href="/services" class="btn btn-primary btn-lg">Explore our services</a>
@@ -128,7 +115,7 @@ const clients = [
       <span class="eyebrow">Who we are</span>
       <h2 class="section-title"><strong>An owner's advocate</strong><br />at every stage.</h2>
       <p class="lead">
-        DCW is an independent, women-owned cost and construction management firm.
+        DCW is an independent, women-owned cost management firm.
         We sit on the owner's side of the table — free from the interests of
         designers or contractors — so we can protect budgets, challenge
         assumptions, and preserve design intent from concept to closeout.
@@ -141,9 +128,9 @@ const clients = [
     <div class="container">
       <div class="section-head">
         <span class="eyebrow">What we do</span>
-        <h2 class="section-title underline-accent">Two disciplines, one owner-first&nbsp;mission</h2>
+        <h2 class="section-title underline-accent">One discipline, one owner-first&nbsp;mission</h2>
       </div>
-      <div class="grid grid-2">
+      <div class="grid" style="max-width:640px;margin-inline:auto">
         {pillars.map((p) => (
           <div class="card card-accent card-hover">
             <span class="tag">{p.tag}</span>

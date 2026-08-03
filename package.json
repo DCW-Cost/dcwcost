@@ -3,7 +3,7 @@
   "type": "module",
   "version": "1.0.0",
   "private": true,
-  "description": "DCW Cost Management — owner-centered cost & construction management firm",
+  "description": "DCW Cost Management — owner-centered cost management firm",
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",

@@ -13,7 +13,7 @@ export const sectors = [
     icon: 'Government',
     image: '/katie-moum-o0kbc907i20-unsplash.jpg',
     tagline: 'Public dollars, defensible numbers.',
-    lead: 'Independent cost and construction management for civic buildings, public works, and agency facilities — keeping public spending accountable, transparent, and defensible at audit.',
+    lead: 'Independent cost management for civic buildings, public works, and agency facilities — keeping public spending accountable, transparent, and defensible at audit.',
     body: [
       'Government owners answer to the public, and so do their budgets. DCW gives agencies a truly independent, third-party read on cost — free from the interests of the designer or contractor — so decisions hold up to scrutiny from the first business case through final reconciliation.',
       'Because we structure ourselves around the sectors we serve, the guidance you get is market-based and specific to public work: prevailing-wage realities, alternative delivery, and the documentation trail that public accountability demands.',
@@ -21,7 +21,7 @@ export const sectors = [
     services: [
       'Third-party (independent) cost estimating — ICE',
       'Business-case and pre-design cost planning',
-      "Owner's representation and construction management",
+      "Owner's representation",
       'Change-order review and reconciliation',
     ],
     projects: ['colman-dock', 'university-link'],
@@ -51,7 +51,7 @@ export const sectors = [
     icon: 'Higher Education',
     image: '/michael-marsh-U0dBV_QeiYk-unsplash.jpg',
     tagline: 'Cost clarity for the campus.',
-    lead: 'Estimating and owner-side management for campus buildings and infrastructure — aligning cost with institutional priorities and long-range capital plans.',
+    lead: 'Estimating and cost management for campus buildings and infrastructure — aligning cost with institutional priorities and long-range capital plans.',
     body: [
       'Colleges and universities balance ambitious design, tight capital budgets, and long time horizons. DCW brings independent cost intelligence to campus work so institutions can fund the right projects and defend them to boards, donors, and the public.',
       'We support master planning, new academic buildings, and campus infrastructure with market-based numbers and whole-life cost thinking.',
@@ -96,7 +96,6 @@ export const sectors = [
     services: [
       'Concept and master-plan cost guidance',
       'Third-party cost estimating',
-      'Construction management',
       'Cost review and reporting',
     ],
     projects: [],
@@ -107,14 +106,13 @@ export const sectors = [
     icon: 'Ports',
     image: '/ronan-furuta-daSq9zhROxY-unsplash.jpg',
     tagline: 'Delivery in demanding operational settings.',
-    lead: 'Estimating and construction management for marine and port facilities — supporting delivery in complex, in-water, and fully operational environments.',
+    lead: 'Estimating and cost management for marine and port facilities — supporting delivery in complex, in-water, and fully operational environments.',
     body: [
       'Marine and port work is unforgiving: in-water infrastructure, active operations, and specialized trades. DCW has managed cost and change on one of the busiest ferry terminals on the West Coast, keeping the numbers defensible while the terminal stayed in full operation.',
     ],
     services: [
       'Comparative and independent cost estimating',
       'Change-order review across complex trades',
-      'Construction management',
       "Owner's representation",
     ],
     projects: ['colman-dock'],
@@ -125,7 +123,7 @@ export const sectors = [
     icon: 'Transportation & Utilities',
     image: '/thomas-despeyroux-Dh5pUa2PwrY-unsplash.jpg',
     tagline: 'Owner-focused cost for infrastructure.',
-    lead: 'Owner-focused cost and construction management for transit, roadway, and utility infrastructure across the Pacific Northwest.',
+    lead: 'Owner-focused cost management for transit, roadway, and utility infrastructure across the Pacific Northwest.',
     body: [
       'Transportation and utility projects are large, phased, and highly visible. DCW gives infrastructure owners independent cost intelligence and hands-on management, from underground transit stations to roadway and utility work.',
     ],
@@ -150,7 +148,6 @@ export const sectors = [
     services: [
       'Third-party cost estimating for specialized facilities',
       'Design-based cost management',
-      'Construction management',
       'Cost review and reporting',
     ],
     projects: [],

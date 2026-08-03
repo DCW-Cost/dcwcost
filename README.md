@@ -1,8 +1,8 @@
 # DCW Cost Management
 
 Marketing website for **DCW Cost Management** (Drew Collaborative Works) — an
-independent, owner-centered cost and construction management firm serving the
-Pacific Northwest since 2012. Women-owned (WBE/WOSB) and employee-owned (EOT).
+independent, owner-centered cost management firm serving the Pacific Northwest
+since 2012. Women-owned (WBE/WOSB) and employee-owned (EOT).
 
 Built with [Astro](https://astro.build) and deployed on
 [Netlify](https://www.netlify.com).
@@ -13,7 +13,7 @@ Built with [Astro](https://astro.build) and deployed on
 | --------------------- | ---------------------------------------------------------------- |
 | `/`                   | Home — firm overview, service pillars, process, featured work    |
 | `/about`              | Firm story, values, and leadership team                          |
-| `/services`           | Cost Management and Construction Management services             |
+| `/services`           | Cost Management services                                         |
 | `/projects`           | Featured case study + case-study library + sectors               |
 | `/projects/[slug]`    | Individual project case studies                                  |
 | `/sectors/[slug]`     | Per-sector landing pages (government, healthcare, K-12, …)       |

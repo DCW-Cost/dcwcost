@@ -14,20 +14,11 @@ const costServices = [
   { title: 'Reconciliation Management', body: 'Structured reconciliation between parties and phases — resolving differences before they become disputes.' },
 ];
 
-const cmServices = [
-  { title: 'Construction Management', body: 'Owner-side management that keeps quality, schedule, and budget aligned with your goals through the build.' },
-  { title: 'Project Management', body: 'Coordinated leadership across teams and phases, translating technical detail into clear owner decisions.' },
-  { title: 'Program Management', body: 'A steady hand across portfolios of work, standardizing process and controls program-wide.' },
-  { title: "Owner's Representation", body: "We represent the owner's interests at the table and protect your goals throughout delivery." },
-  { title: 'Alternative Delivery Consulting', body: 'Guidance on progressive design-build, GC/CM, and other delivery models to match method to project.' },
-  { title: 'Staff Augmentation', body: 'Experienced cost and project professionals who plug into your team exactly when you need them.' },
-];
-
 ---
 
 <Layout
   title="Services"
-  description="DCW Cost Management delivers independent cost management and owner-side construction management — third-party estimating, cost planning, owner's representation, and more."
+  description="DCW Cost Management delivers independent cost management — third-party estimating, cost planning, life-cycle cost analysis, cost review and reporting, and more."
 >
   <PageHeader
     eyebrow="Services"
@@ -39,12 +30,11 @@ const cmServices = [
   <section class="section">
     <div class="container svc-intro">
       <div>
-        <h2 class="section-title"><strong>Personalized</strong><br />cost &amp; construction management</h2>
+        <h2 class="section-title"><strong>Personalized</strong><br />cost management</h2>
         <p class="lead">
           We're proud of a strong reputation for service — with clients who
-          regularly recommend us and our work. Whether you need independent cost
-          intelligence, owner-side construction management, or both, we tailor
-          our support to your project.
+          regularly recommend us and our work. We tailor our independent cost
+          intelligence to the scope of your project, at every phase.
         </p>
       </div>
       <blockquote class="svc-quote">
@@ -57,22 +47,11 @@ const cmServices = [
   <!-- ---- Service columns ---- -->
   <section class="section section-blue">
     <div class="container">
-      <div class="grid grid-2 svc-columns">
+      <div class="svc-columns-single">
         <div>
           <h2 class="svc-col-title">Cost Management Services</h2>
           <div class="svc-list">
             {costServices.map((s) => (
-              <details class="svc-item">
-                <summary>{s.title}</summary>
-                <p>{s.body}</p>
-              </details>
-            ))}
-          </div>
-        </div>
-        <div>
-          <h2 class="svc-col-title">Construction Management Services</h2>
-          <div class="svc-list">
-            {cmServices.map((s) => (
               <details class="svc-item">
                 <summary>{s.title}</summary>
                 <p>{s.body}</p>
@@ -116,8 +95,8 @@ const cmServices = [
     <div class="container">
       <h2 class="section-title center">Not sure which service you need?</h2>
       <p class="lead mx-auto" style="text-align:center">
-        Tell us about your project and we'll help you scope the right support —
-        cost, construction management, or both.
+        Tell us about your project and we'll help you scope the right cost
+        support — at whatever phase you're in.
       </p>
       <div class="mt-2">
         <a href="/contact" class="btn btn-primary btn-lg">Start a conversation</a>
@@ -150,6 +129,10 @@ const cmServices = [
   .svc-quote cite { font-style: normal; font-weight: 700; color: var(--blue); }
   .svc-quote cite span { display: block; font-weight: 500; color: var(--muted); font-size: 0.88rem; margin-top: 0.15rem; }
 
+  .svc-columns-single {
+    max-width: 720px;
+    margin-inline: auto;
+  }
   .svc-col-title {
     color: #fff;
     padding-bottom: 0.85rem;
