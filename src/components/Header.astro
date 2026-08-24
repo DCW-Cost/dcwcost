@@ -16,18 +16,28 @@ const links = [
 ];
 ---
 
-<header class="site-header">
+<header class="site-header" data-header>
   <div class="container header-inner">
     <a href="/" class="brand" aria-label="DCW Cost Management — home">
       <Logo tone="color" size={50} />
     </a>
 
-    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true" />
-    <label for="nav-toggle" class="nav-burger" aria-label="Toggle navigation">
+    <!-- Real <button> (not a label-for-checkbox) so the menu is reachable by
+         keyboard and announces its state. See the inline script below: the
+         nav is expanded by default and only collapses once JS confirms it can
+         reopen it, so a no-JS visitor still gets full navigation. -->
+    <button
+      type="button"
+      class="nav-burger"
+      aria-label="Menu"
+      aria-expanded="false"
+      aria-controls="site-nav"
+      data-nav-toggle
+    >
       <span></span><span></span><span></span>
-    </label>
+    </button>
 
-    <nav class="site-nav" aria-label="Primary">
+    <nav id="site-nav" class="site-nav" aria-label="Primary">
       <ul>
         {links.map((l) => (
           <li>
@@ -38,12 +48,36 @@ const links = [
           </li>
         ))}
         <li class="nav-cta">
-          <a href="/contact" class="btn btn-outline">Collaborate Today!</a>
+          <a href="/contact" class="btn btn-outline">Start a Conversation</a>
         </li>
       </ul>
     </nav>
   </div>
 </header>
+
+<script is:inline>
+  (() => {
+    const header = document.querySelector('[data-header]');
+    const toggle = header && header.querySelector('[data-nav-toggle]');
+    if (!header || !toggle) return;
+
+    const setOpen = (open) => {
+      header.toggleAttribute('data-nav-open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+
+    toggle.addEventListener('click', () => {
+      setOpen(!header.hasAttribute('data-nav-open'));
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && header.hasAttribute('data-nav-open')) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+  })();
+</script>
 
 <style>
   .site-header {
@@ -88,25 +122,43 @@ const links = [
   }
   /* nav-cta is a .btn — keep its full border; no nav underline needed */
 
-  /* Mobile toggle */
-  .nav-toggle, .nav-burger { display: none; }
+  .nav-burger { display: none; }
 
   @media (max-width: 960px) {
     .nav-burger {
       display: flex;
       flex-direction: column;
       justify-content: center;
+      align-items: center;
       gap: 5px;
       width: 44px;
       height: 44px;
+      padding: 0;
+      background: none;
+      border: 0;
+      border-radius: var(--radius);
       cursor: pointer;
     }
     .nav-burger span {
       height: 2px;
       width: 26px;
       background: var(--blue);
-      transition: 0.2s ease;
+      border-radius: 2px;
+      transition: transform 0.22s ease, opacity 0.18s ease;
     }
+    .nav-burger:focus-visible {
+      outline: 2px solid var(--green-ink);
+      outline-offset: 2px;
+    }
+    /* Burger morphs into an X while the menu is open. */
+    .site-header[data-nav-open] .nav-burger span:nth-child(1) {
+      transform: translateY(7px) rotate(45deg);
+    }
+    .site-header[data-nav-open] .nav-burger span:nth-child(2) { opacity: 0; }
+    .site-header[data-nav-open] .nav-burger span:nth-child(3) {
+      transform: translateY(-7px) rotate(-45deg);
+    }
+
     .site-nav {
       position: absolute;
       top: 80px;
@@ -115,9 +167,6 @@ const links = [
       background: #fff;
       border-bottom: 1px solid var(--line);
       box-shadow: var(--shadow-md);
-      max-height: 0;
-      overflow: hidden;
-      transition: max-height 0.28s ease;
     }
     .site-nav ul {
       flex-direction: column;
@@ -126,8 +175,16 @@ const links = [
       padding: 0.5rem 0;
     }
     .site-nav li { padding: 0.55rem var(--gap); }
-    .nav-toggle:checked ~ .site-nav { max-height: 520px; }
     .nav-cta { padding-top: 0.75rem !important; }
     .nav-cta a { display: inline-flex; }
+
+    /* Collapsed only when JS is running to reopen it (html.js is set in
+       Layout.astro's <head>, so there is no open-then-snap-shut flash). */
+    :global(html.js) .site-nav {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.28s ease;
+    }
+    :global(html.js) .site-header[data-nav-open] .site-nav { max-height: 520px; }
   }
 </style>

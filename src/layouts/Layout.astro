@@ -49,6 +49,10 @@ const orgSchema = {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Marks the document as JS-capable before first paint. The mobile nav
+         is expanded by default so it still works without JS; this class is
+         what lets CSS collapse it behind the burger button. -->
+    <script is:inline>document.documentElement.classList.add('js');</script>
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
     <link rel="canonical" href={canonical} />

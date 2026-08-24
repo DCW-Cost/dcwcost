@@ -168,7 +168,7 @@ img { max-width: 100%; display: block; }
   border-color: var(--green-600);
   color: #fff;
 }
-.btn-outline {           /* "COLLABORATE TODAY!" outline style */
+.btn-outline {           /* secondary CTA — outlined, blue on white */
   background: transparent;
   color: var(--blue);
   border-color: var(--blue);

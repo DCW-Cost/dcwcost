@@ -37,6 +37,36 @@ const pillars = [
   },
 ];
 
+// Client-care commitments — Pillar 1 of DCW's 2026–2036 strategic plan
+// ("client relationships are at the core of the service offering").
+const care = [
+  'Answers, not just numbers — we explain what sits behind every line.',
+  "Prompt, direct communication — you talk to the people doing the work.",
+  'Engaged past the deliverable, through the decisions it informs.',
+  'One team from planning through occupancy — no handoff to a different bench.',
+];
+
+// Technology & process — Pillar 4 of the strategic plan. Deliberately describes
+// method rather than naming specific tools or claiming capabilities.
+// ⚠️ VERIFY BEFORE LAUNCH: confirm this framing with DCW leadership.
+const systems = [
+  {
+    title: 'Structured workflows',
+    body:
+      'Consistent estimating methods and internal review across every project, so the number you get reflects our process — not just whoever prepared it.',
+  },
+  {
+    title: 'Reporting you can compare',
+    body:
+      'Cost information presented the same way at every milestone, so owners can read phase against phase and see exactly what moved, and why.',
+  },
+  {
+    title: 'Tools that earn their place',
+    body:
+      'We study what is available, test it for fit, and measure what it actually saves. Less manual effort means our people spend their time on judgment.',
+  },
+];
+
 const process = [
   { step: '01', title: 'Understand the owner', body: 'We start with your goals, constraints, and risk tolerance — not a template.' },
   { step: '02', title: 'Set a defensible baseline', body: 'Independent estimates and a clear business case, before commitments are made.' },
@@ -131,8 +161,32 @@ const clients = [
     </div>
   </section>
 
-  <!-- ============ PROCESS ============ -->
+  <!-- ============ MORE THAN A DELIVERABLE ============ -->
   <section class="section">
+    <div class="container care-inner">
+      <div>
+        <span class="eyebrow">Client care</span>
+        <h2 class="section-title underline-accent">More than a&nbsp;deliverable</h2>
+        <p>
+          Our work does not end when the estimate lands in your inbox. We walk
+          owners through the numbers, answer the questions behind them, and stay
+          engaged through the decisions they inform.
+        </p>
+        <p>
+          Clear, prompt communication is not a courtesy we add on top. It is how
+          owners stay in control of their own projects — and it is the reason
+          our clients keep bringing us the next one.
+        </p>
+        <a href="/contact" class="btn btn-outline mt-1">Discuss your project</a>
+      </div>
+      <ul class="care-list">
+        {care.map((c) => <li>{c}</li>)}
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ PROCESS ============ -->
+  <section class="section section-mist">
     <div class="container">
       <div class="section-head">
         <span class="eyebrow">How we work</span>
@@ -144,6 +198,31 @@ const clients = [
             <span class="step-num">{p.step}</span>
             <h3>{p.title}</h3>
             <p>{p.body}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TECHNOLOGY & PROCESS ============ -->
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Technology &amp; process</span>
+        <h2 class="section-title underline-accent">The systems behind the&nbsp;numbers</h2>
+        <p class="lead">
+          Good cost advice is not a one-off performance — it has to be
+          repeatable. We invest in the workflows, data, and reporting that make
+          our advice consistent, and we hold new technology to the same standard
+          we hold every project cost: it earns its place by proving measurable
+          value.
+        </p>
+      </div>
+      <div class="grid grid-3">
+        {systems.map((x) => (
+          <div class="card card-accent card-hover">
+            <h3>{x.title}</h3>
+            <p>{x.body}</p>
           </div>
         ))}
       </div>
@@ -300,6 +379,31 @@ const clients = [
   }
   .process-step h3 { font-size: 1.15rem; margin-bottom: 0.35rem; }
   .process-step p { color: var(--muted); font-size: 0.97rem; }
+
+  /* ---- Client care ---- */
+  .care-inner {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: clamp(2rem, 5vw, 4rem);
+    align-items: center;
+  }
+  .care-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0 1.5rem;
+    border-left: 4px solid var(--green);
+    display: grid;
+    gap: 1.1rem;
+  }
+  .care-list li {
+    font-size: 1.02rem;
+    font-weight: 500;
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  @media (max-width: 820px) {
+    .care-inner { grid-template-columns: 1fr; }
+  }
 
   /* ---- Market tiles ---- */
   .market-tile {
