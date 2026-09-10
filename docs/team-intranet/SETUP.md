@@ -75,6 +75,19 @@ In the Supabase dashboard:
    - **Client ID** — the Application (client) ID from step 2
    - **Secret** — the client secret *Value* from step 2
    - **Azure Tenant URL** — `https://login.microsoftonline.com/<DIRECTORY-TENANT-ID>`
+
+   **Leave "Allow users without an email" OFF.** The email address is what
+   every gate in this system runs on: `profiles.email` is `not null unique`
+   with a domain check constraint, the signup trigger refuses to create a row
+   without one, and the app signs out anyone whose address fails the domain
+   test. A user with no email would authenticate with Microsoft and then hit a
+   silent dead end, with no profile row for an admin to even see.
+
+   If sign-in ever fails complaining about a missing email, **this toggle is
+   not the fix** — it means the Entra registration isn't releasing the email
+   claim. Go back to step 2 and check that `email`, `openid`, `profile` and
+   `offline_access` are under API permissions and that admin consent was
+   granted.
 2. **Authentication → URL Configuration**:
    - **Site URL**: `http://localhost:4321` while developing; the real domain later
    - **Redirect URLs** — add both:
