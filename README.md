@@ -57,7 +57,13 @@ rejection, the confidence gate and the trend test all genuinely run
 comes from `src/lib/intranet/data/fixtures.ts` and every figure is invented.
 Write actions (approve, revoke, confirm, accept) render but don't persist yet.
 
-**Not ready to merge to `main`.** With no Supabase credentials the area falls
+**Verified on a deploy preview (10 Sep 2026):** Microsoft sign-in works end to
+end, sessions persist across navigation, and — importantly — **Netlify Forms
+still receives contact-form submissions** with the SSR adapter in place. That
+last one was the real risk in adding the adapter: `netlify.toml` records the
+form having been broken once before by a catch-all route. It is not broken now.
+
+**Still not ready for the team.** With no Supabase credentials the area falls
 back to a demo mode where *everyone is treated as an admin* — fine locally,
 never anywhere reachable. Four things keep it contained: `INTRANET_ENABLED`
 must be `true` or every route 404s, `/teamintranet` is excluded from the
