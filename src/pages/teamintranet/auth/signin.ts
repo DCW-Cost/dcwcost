@@ -3,7 +3,7 @@
  * sends the browser back to /teamintranet/auth/callback with a code.
  */
 import type { APIRoute } from 'astro';
-import { serverClient, authConfigured } from '../../../lib/intranet/auth.ts';
+import { serverClient, authConfigured, NEXT_COOKIE } from '../../../lib/intranet/auth.ts';
 
 export const prerender = false;
 
@@ -18,12 +18,32 @@ export const GET: APIRoute = async ({ cookies, request, url, redirect }) => {
   const next = url.searchParams.get('next') ?? '/teamintranet/';
   const supabase = serverClient(cookies, request)!;
 
+  // Where to land after sign-in travels in a cookie, NOT in the callback's
+  // query string. Supabase matches redirect URLs against its allowlist
+  // including any query parameters, so a callback of
+  // `/auth/callback?next=%2Fteamintranet%2F` does not match an allowlisted
+  // `/auth/callback` — Supabase silently falls back to the project's Site URL
+  // and the user lands on the wrong site entirely.
+  //
+  // Keeping the callback URL constant means exactly one allowlist entry per
+  // environment, and nothing to keep in sync when the destination changes.
+  //
+  // sameSite 'lax' is required: the return leg from Microsoft is a top-level
+  // navigation from another origin, and 'strict' would withhold the cookie.
+  cookies.set(NEXT_COOKIE, next, {
+    path: '/teamintranet',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: url.protocol === 'https:',
+    maxAge: 600,
+  });
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'azure',
     options: {
       // Entra ID scopes. `email` is what the domain gate checks.
       scopes: 'openid profile email offline_access',
-      redirectTo: `${url.origin}/teamintranet/auth/callback?next=${encodeURIComponent(next)}`,
+      redirectTo: `${url.origin}/teamintranet/auth/callback`,
     },
   });
 

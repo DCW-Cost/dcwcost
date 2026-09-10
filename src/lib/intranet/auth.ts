@@ -178,6 +178,17 @@ export async function resolveSession(
   return { kind: 'active', profile };
 }
 
+/**
+ * Carries the post-sign-in destination across the round trip to Microsoft.
+ *
+ * It is a cookie rather than a query parameter on the callback URL because
+ * Supabase matches redirect URLs against its allowlist including the query
+ * string — so a varying callback URL either fails the match (and silently
+ * redirects to the project's Site URL) or forces a wildcard entry that is
+ * far broader than it needs to be.
+ */
+export const NEXT_COOKIE = 'dcw_intranet_next';
+
 /** Where a signed-out visitor should be sent, preserving where they were going. */
 export function signinUrl(returnTo?: string): string {
   const base = '/teamintranet/signin';

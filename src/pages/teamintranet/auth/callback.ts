@@ -4,7 +4,7 @@
  * decides whether this person gets in, waits, or is turned away.
  */
 import type { APIRoute } from 'astro';
-import { serverClient, authConfigured } from '../../../lib/intranet/auth.ts';
+import { serverClient, authConfigured, NEXT_COOKIE } from '../../../lib/intranet/auth.ts';
 
 export const prerender = false;
 
@@ -13,7 +13,12 @@ export const GET: APIRoute = async ({ cookies, request, url, redirect }) => {
 
   const code = url.searchParams.get('code');
   const oauthError = url.searchParams.get('error_description') ?? url.searchParams.get('error');
-  const next = url.searchParams.get('next') ?? '/teamintranet/';
+
+  // Set by /auth/signin before the trip to Microsoft. Read it once and clear
+  // it — leaving it around would silently redirect a later sign-in somewhere
+  // the person did not ask to go.
+  const next = cookies.get(NEXT_COOKIE)?.value ?? '/teamintranet/';
+  cookies.delete(NEXT_COOKIE, { path: '/teamintranet' });
 
   if (oauthError) {
     return redirect(`/teamintranet/signin?error=${encodeURIComponent(oauthError)}`, 302);
