@@ -1,4 +1,4 @@
-const pptxgen = require('pptxgenjs');
+import pptxgen from 'pptxgenjs';
 
 const pres = new pptxgen();
 pres.layout = 'LAYOUT_16x9';           // 10" x 5.625" — matches Google Slides' native canvas
@@ -793,5 +793,5 @@ s.addNotes(
   'not the drudgery. It is not. It is coming for the half hour of digging through Box.'
 );
 
-pres.writeFile({ fileName: __dirname + '/DCW-Cost-Library-Pilot.pptx' })
+pres.writeFile({ fileName: import.meta.dirname + '/DCW-Cost-Library-Pilot.pptx' })
   .then((f) => console.log('wrote', f));

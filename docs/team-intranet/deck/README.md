@@ -9,6 +9,11 @@ diffable and reproducible.
 | `model.py` | `DCW-Cost-Library-Business-Model.xlsx` — the time-savings and business-impact model | `pip install openpyxl && python3 model.py` |
 | `check.py` | Geometry QA on the deck | `pip install python-pptx && python3 check.py <file.pptx>` |
 
+These are standalone tooling scripts, not part of the site build — `pptxgenjs`,
+`openpyxl` and `python-pptx` are deliberately *not* site dependencies. Install
+them here rather than at the repo root, so the site's `package.json` stays
+untouched. `deck.js` is ESM because the repo sets `"type": "module"`.
+
 Upload the `.pptx` to Google Drive and open it with Slides; Drive converts it to
 a native Google Slides file, so every element stays editable.
 
