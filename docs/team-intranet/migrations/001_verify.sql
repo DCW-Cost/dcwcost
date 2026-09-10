@@ -9,7 +9,7 @@
 --   item                  value
 --   --------------------  -----
 --   wishlist tables       3
---   wishlist policies     13
+--   wishlist policies     12    (5 items + 3 votes + 4 comments)
 --   v_wishlist invoker    true      <-- this one is not optional
 --   deliverables columns  6
 --   storage bucket        1

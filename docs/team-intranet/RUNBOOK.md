@@ -39,7 +39,7 @@ into a **New query**, and Run. This one returns rows.
 | item | expected |
 | --- | --- |
 | wishlist tables | `3` |
-| wishlist policies | `13` |
+| wishlist policies | `12` |
 | **v_wishlist invoker** | **`true`** |
 | deliverables columns | `6` |
 | storage bucket | `1` |
