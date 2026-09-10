@@ -321,32 +321,10 @@ create policy deliverables_bucket_delete on storage.objects
   for delete using (bucket_id = 'deliverables' and is_admin());
 
 -- ============================================================================
--- 3. Verification — run this after, and read the output
+-- 3. Verification
 --
--- Expected:
---   wishlist tables        3
---   wishlist policies     13
---   v_wishlist invoker     true
---   deliverables columns   6
+-- Run `001_verify.sql` (next to this file) in a NEW query once this succeeds.
+-- It returns six rows; two of them — "v_wishlist invoker" and "bucket is
+-- private" — must both read `true`. Either one false means data is reachable
+-- that should not be.
 -- ============================================================================
---
--- select 'wishlist tables' as check, count(*)::text as value
---   from information_schema.tables
---  where table_schema = 'public'
---    and table_name in ('wishlist_items','wishlist_votes','wishlist_comments')
--- union all
--- select 'wishlist policies', count(*)::text
---   from pg_policies
---  where schemaname = 'public' and tablename like 'wishlist%'
--- union all
--- select 'v_wishlist invoker',
---        (c.reloptions::text like '%security_invoker=true%')::text
---   from pg_class c
---   join pg_namespace n on n.oid = c.relnamespace
---  where n.nspname = 'public' and c.relname = 'v_wishlist'
--- union all
--- select 'deliverables columns', count(*)::text
---   from information_schema.columns
---  where table_schema = 'public' and table_name = 'deliverables'
---    and column_name in ('source','storage_path','original_filename',
---                        'uploaded_by','uploaded_at','byte_size');

@@ -32,36 +32,23 @@ is broken; skip to step 2.
 
 ### Check it took
 
-New query, paste this, Run:
+Do **not** re-run the migration to check it. Open
+[`migrations/001_verify.sql`](migrations/001_verify.sql), copy the whole thing
+into a **New query**, and Run. This one returns rows.
 
-```sql
-select 'wishlist tables' as check, count(*)::text as value
-  from information_schema.tables
- where table_schema = 'public'
-   and table_name in ('wishlist_items','wishlist_votes','wishlist_comments')
-union all
-select 'wishlist policies', count(*)::text
-  from pg_policies
- where schemaname = 'public' and tablename like 'wishlist%'
-union all
-select 'v_wishlist invoker',
-       (c.reloptions::text like '%security_invoker=true%')::text
-  from pg_class c join pg_namespace n on n.oid = c.relnamespace
- where n.nspname = 'public' and c.relname = 'v_wishlist'
-union all
-select 'storage bucket', count(*)::text
-  from storage.buckets where id = 'deliverables';
-```
-
-| check | expected |
+| item | expected |
 | --- | --- |
 | wishlist tables | `3` |
 | wishlist policies | `13` |
-| v_wishlist invoker | `true` |
+| **v_wishlist invoker** | **`true`** |
+| deliverables columns | `6` |
 | storage bucket | `1` |
+| **bucket is private** | **`true`** |
 
-`v_wishlist invoker` must be **true**. If it is false or blank, stop and tell me —
-a view without it reads straight past every security policy.
+The two bold rows are the ones that matter. A view without `security_invoker`
+runs with its owner's privileges and reads past every security policy beneath
+it; a public bucket puts client cost plans on a guessable URL with no sign-in.
+If either says `false`, stop and tell me.
 
 ---
 
