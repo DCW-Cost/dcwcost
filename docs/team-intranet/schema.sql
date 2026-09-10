@@ -7,10 +7,16 @@
 --     Everything mirrored from it carries an `airtable_record_id` and is
 --     refreshed by a one-way sync. Never write back to those columns.
 --   * Raw extracted values are never overwritten. Every normalized column sits
---     NEXT TO its raw source, so a bad mapping is always recoverable.
---   * All math (totals, conversions, statistics) happens here or in the
---     analytics layer — never in the extraction model.
---   * RLS is deny-by-default on every table. See §7.
+--     NEXT TO its raw source, so a bad mapping — or a reader assumption later
+--     corrected — is always recoverable by recomputing from raw.
+--   * The reader interprets; it never calculates. All math (totals, unit
+--     conversion, markup stripping, escalation, statistics) happens here or in
+--     the analytics layer, from values the reader read off the page.
+--   * Every line item's meaning depends on its document's frame — how that
+--     document was coded, what area it was priced against, where its markups
+--     live. Frames are therefore stored explicitly (§3b), not left implicit.
+--   * All active users see all clients, as they do in Airtable today. There is
+--     no per-client tiering. RLS is still deny-by-default on every table (§7).
 -- ============================================================================
 
 create extension if not exists "pgcrypto";
@@ -110,8 +116,6 @@ create table cost_indices (
 -- 3. Projects and deliverables (mirrored from Airtable)
 -- ============================================================================
 
-create type confidentiality as enum ('standard', 'restricted');
-
 create table projects (
   id                  uuid primary key default gen_random_uuid(),
   airtable_record_id  text unique not null,
@@ -126,7 +130,6 @@ create table projects (
   delivery_method     text,          -- DBB, CM/GC, design-build, progressive
   construction_start  date,
   project_status      text,
-  confidentiality     confidentiality not null default 'standard',
   synced_at           timestamptz not null default now()
 );
 
@@ -144,8 +147,12 @@ create type design_phase as enum
   ('concept', 'schematic', 'design_development', 'construction_documents',
    'bid', 'unknown');
 
+-- 'needs_answer' is a BLOCKING reader question — the document stays out of the
+-- library until a human resolves it. 'accepted' documents may still carry
+-- unconfirmed assumptions; those are non-blocking and tracked on the frame.
 create type ingest_status as enum
-  ('pending', 'downloading', 'extracting', 'needs_review', 'accepted', 'failed', 'skipped');
+  ('pending', 'downloading', 'framing', 'extracting', 'reconciling',
+   'needs_answer', 'accepted', 'failed', 'skipped');
 
 create table deliverables (
   id                  uuid primary key default gen_random_uuid(),
@@ -164,15 +171,14 @@ create table deliverables (
   source_format       text,          -- 'xlsx' | 'pdf'
   file_checksum       text,          -- re-ingest detection
 
-  -- How markups are treated in this document. Determines whether line-item
-  -- rates are bare or loaded — see PLAN §12 Q3. Do not pool across values.
-  markup_treatment    text,          -- 'bare' | 'loaded' | 'unknown'
+  -- How this document handles markups, what area it is priced against, and how
+  -- it is coded all live on its frame (§3b) rather than here, because each is a
+  -- reader determination with its own evidence and confidence.
 
-  total_cost          numeric(16,2), -- as stated on the document
+  stated_total_cost   numeric(16,2), -- the check figure, as printed
   currency            char(3) not null default 'USD',
 
   status              ingest_status not null default 'pending',
-  extraction_confidence numeric(4,3),
   upload_notes        text,          -- carried over from Airtable
   synced_at           timestamptz not null default now(),
   ingested_at         timestamptz
@@ -181,7 +187,73 @@ create table deliverables (
 create index on deliverables (project_id);
 create index on deliverables (type, phase);
 create index on deliverables (issue_date);
-create index on deliverables (status) where status in ('needs_review', 'failed');
+create index on deliverables (status) where status in ('needs_answer', 'failed');
+
+-- ============================================================================
+-- 3b. Document frames — what the reader understood before extracting
+--
+-- The same "$13.20" means different things depending on whether it is loaded,
+-- what area it is priced against, and what date it is priced to. Pass one of
+-- the reader establishes exactly that, and it is recorded here with evidence
+-- and confidence per determination. Every derived figure in `line_items`
+-- depends on this row being right, so a corrected frame recomputes them.
+-- See PLAN §6.2.
+-- ============================================================================
+
+create type coding_system as enum
+  ('uniformat', 'masterformat', 'in_house', 'mixed', 'none', 'undetermined');
+
+-- Where element rates sit relative to the document's markup stack.
+create type cost_basis as enum ('bare', 'loaded', 'undetermined');
+
+create table document_frames (
+  id                  uuid primary key default gen_random_uuid(),
+  deliverable_id      uuid not null unique
+                        references deliverables(id) on delete cascade,
+
+  -- ---- Coding ----
+  coding_system       coding_system not null default 'undetermined',
+  coding_confidence   numeric(4,3),
+  coding_evidence     text,          -- what in the document indicated it
+
+  -- ---- The denominator for every $/GSF figure ----
+  gsf_used            numeric(14,2),
+  gsf_source          text,          -- 'cover_sheet' | 'summary_block' |
+                                     -- 'airtable' | 'back_calculated' | 'assumed'
+  gsf_confidence      numeric(4,3),
+  gsf_evidence        text,          -- 'p.2 summary block; totals reconcile
+                                     --  to 0.3%; Airtable agrees'
+
+  -- ---- Markup structure. See PLAN §5.4 ----
+  basis               cost_basis not null default 'undetermined',
+  markup_factor       numeric(8,5),  -- loaded = bare x factor. 1.0 when bare.
+  markup_components   jsonb,         -- [{label:'General conditions', pct:8.5},
+                                     --  {label:"GC's fee", pct:5.0}, …]
+  markup_confidence   numeric(4,3),
+  markup_evidence     text,
+
+  -- ---- Escalation starting point. Often NOT the issue date. PLAN §5.5 ----
+  pricing_base_date   date,
+  base_date_source    text,          -- 'stated' | 'issue_date_fallback'
+
+  -- ---- Pass three: does it add up? PLAN §6.4 ----
+  extracted_total     numeric(16,2), -- sum of what the reader pulled
+  reconciles          boolean,
+  reconciliation_delta_pct numeric(8,4),
+  reconciliation_note text,          -- the explanation, where there is one
+
+  -- ---- Provenance ----
+  reader_version      text not null,
+  framing_model       text,          -- e.g. 'claude-opus-5'
+  extraction_model    text,          -- e.g. 'claude-sonnet-5' or 'template_parser'
+  conventions_applied bigint[],      -- reader_conventions.id, see §5b
+  has_open_assumption boolean not null default false,
+  created_at          timestamptz not null default now()
+);
+
+create index on document_frames (deliverable_id);
+create index on document_frames (has_open_assumption) where has_open_assumption;
+create index on document_frames (reconciles) where reconciles is false;
 
 -- ============================================================================
 -- 4. The observations
@@ -208,13 +280,24 @@ create table line_items (
   total_cost          numeric(16,2),
 
   -- ---- Derived comparators. See PLAN §5.3. ----
-  -- Always computable when the project's GSF is known — this is what makes a
-  -- lump-sum row comparable to a per-CY row.
+  -- Always computable when the frame established a gross area — this is what
+  -- makes a lump-sum row comparable to a per-CY row.
   cost_per_project_sf numeric(16,6),
   pct_of_total        numeric(8,5),
-  -- Escalated to the current period using cost_indices.
-  escalated_cost_per_project_sf numeric(16,6),
-  escalation_index_version      text,
+
+  -- ---- Bare vs. loaded. See PLAN §5.4. ----
+  -- `unit_cost` above is always as-written. These are the same rate reduced to
+  -- a bare basis using the frame's markup_factor, which is the only basis on
+  -- which the archive is internally consistent. The library pools on bare by
+  -- default; 'undetermined' rows are held out of the default pool entirely.
+  basis                     cost_basis not null default 'undetermined',
+  bare_unit_cost            numeric(16,4),
+  bare_cost_per_project_sf  numeric(16,6),
+
+  -- Escalated to the current period using cost_indices, from the frame's
+  -- pricing_base_date rather than the issue date.
+  escalated_bare_cost_per_project_sf numeric(16,6),
+  escalation_index_version           text,
 
   is_markup           boolean not null default false,  -- GC, fee, contingency,
                                                        -- escalation lines
@@ -234,6 +317,7 @@ create table line_items (
 create index on line_items (deliverable_id);
 create index on line_items (taxonomy_code);
 create index on line_items (taxonomy_code, uom_canonical);
+create index on line_items (taxonomy_code, basis) where basis <> 'undetermined';
 create index on line_items (confidence) where reviewed_at is null;
 
 -- "Everything every estimator has said about each line item." — Rachel, 2026-09-09
@@ -248,6 +332,89 @@ create table estimator_notes (
 );
 
 create index on estimator_notes (line_item_id);
+
+-- ============================================================================
+-- 4b. The reader's questions, and what it learns from the answers
+--
+-- The reader never guesses silently. Anything it cannot resolve becomes a row
+-- here: 'question' rows block the document out of the library until answered;
+-- 'assumption' rows do not block — the reader proposes an answer with its
+-- evidence and the data stays usable while it waits, but every result derived
+-- from it says so. See PLAN §6.4.
+-- ============================================================================
+
+create type question_kind as enum
+  ('coding_system', 'gross_area', 'markup_basis', 'deliverable_type',
+   'pricing_base_date', 'reconciliation', 'taxonomy_mapping', 'other');
+
+-- 'question' blocks; 'assumption' is proposed and awaits confirmation.
+create type question_mode as enum ('question', 'assumption');
+
+create type question_state as enum
+  ('open', 'answered', 'confirmed', 'corrected', 'withdrawn');
+
+create table reader_questions (
+  id              bigserial primary key,
+  deliverable_id  uuid not null references deliverables(id) on delete cascade,
+  frame_id        uuid references document_frames(id) on delete cascade,
+  line_item_id    uuid references line_items(id) on delete cascade,
+
+  kind            question_kind not null,
+  mode            question_mode not null,
+  state           question_state not null default 'open',
+
+  prompt          text not null,     -- what the reader is asking, in plain words
+  evidence        text,              -- what it found, and where
+  proposed_answer jsonb,             -- the assumption, when mode='assumption'
+  options         jsonb,             -- discrete choices, where they exist
+
+  answer          jsonb,             -- what the human decided
+  answered_by     uuid references profiles(id),
+  answered_at     timestamptz,
+  answer_note     text,
+
+  -- Set when an answer was generalized into a standing rule (§4b below).
+  became_convention bigint,
+
+  created_at      timestamptz not null default now()
+);
+
+create index on reader_questions (state) where state = 'open';
+create index on reader_questions (deliverable_id);
+create index on reader_questions (mode, state);
+
+-- What the reader learned. This is what makes 1,235 documents tractable rather
+-- than exhausting: an answer is generalized to a scope, and every subsequent
+-- document matching that scope applies it without asking again. Scope is
+-- deliberately narrow and explicit — a convention that is true of Brian's 2024
+-- plans is not necessarily true of anyone else's. See PLAN §6.5.
+create table reader_conventions (
+  id              bigserial primary key,
+  kind            question_kind not null,
+
+  -- Scope. NULL means "does not narrow on this dimension".
+  scope_estimator text,
+  scope_template  text,              -- template fingerprint
+  scope_client    text,
+  scope_from      date,
+  scope_to        date,
+
+  rule            jsonb not null,    -- the determination to apply
+  rationale       text,
+
+  active          boolean not null default true,
+  learned_from    bigint references reader_questions(id),
+  created_by      uuid references profiles(id),
+  created_at      timestamptz not null default now(),
+  superseded_by   bigint references reader_conventions(id)
+);
+
+create index on reader_conventions (kind) where active;
+create index on reader_conventions (scope_estimator) where active;
+
+alter table reader_questions
+  add constraint reader_questions_became_convention_fk
+  foreign key (became_convention) references reader_conventions(id);
 
 -- ============================================================================
 -- 5. Analytics configuration
@@ -266,6 +433,10 @@ create table confidence_rules (
   green_min_projects    smallint not null default 3,
   green_min_estimators  smallint not null default 2,
   green_max_age_months  smallint not null default 18,
+  -- Green additionally requires that no observation in the pool rests on a
+  -- reader assumption a human hasn't confirmed. Confirming them can move a
+  -- result from amber to green on the spot. See PLAN §7.
+  green_requires_confirmed_assumptions boolean not null default true,
 
   amber_min_n           smallint not null default 4,
   amber_max_cv          numeric(5,3) not null default 0.50,
@@ -337,20 +508,30 @@ create index on audit_log (action, created_at desc);
 --
 -- Policy lives in the database, not in the Astro pages. A bug in the UI cannot
 -- leak a row that policy forbids. The service-role key never reaches a browser.
+--
+-- Access is binary: an approved, active user sees all cost data for all
+-- clients, exactly as they do in Airtable today. There is no per-client
+-- tiering. Were a future client contract ever to require ring-fencing, it is a
+-- flag on `projects` and one extra clause in the three read policies below —
+-- but building it speculatively would add friction for a problem DCW does not
+-- have. See PLAN §9.
 -- ============================================================================
 
-alter table profiles          enable row level security;
-alter table projects          enable row level security;
-alter table deliverables      enable row level security;
-alter table line_items        enable row level security;
-alter table estimator_notes   enable row level security;
-alter table taxonomy          enable row level security;
-alter table units             enable row level security;
-alter table cost_indices      enable row level security;
-alter table confidence_rules  enable row level security;
-alter table ingest_runs       enable row level security;
-alter table rate_overrides    enable row level security;
-alter table audit_log         enable row level security;
+alter table profiles           enable row level security;
+alter table projects           enable row level security;
+alter table deliverables       enable row level security;
+alter table document_frames    enable row level security;
+alter table line_items         enable row level security;
+alter table estimator_notes    enable row level security;
+alter table reader_questions   enable row level security;
+alter table reader_conventions enable row level security;
+alter table taxonomy           enable row level security;
+alter table units              enable row level security;
+alter table cost_indices       enable row level security;
+alter table confidence_rules   enable row level security;
+alter table ingest_runs        enable row level security;
+alter table rate_overrides     enable row level security;
+alter table audit_log          enable row level security;
 
 -- Profiles: you can always read yourself. Admins read and write everyone.
 create policy profiles_self_read on profiles
@@ -372,42 +553,32 @@ create policy rules_read on confidence_rules
 create policy rules_admin_write on confidence_rules
   for all using (is_admin());
 
--- Cost data: active users only. Restricted-confidentiality projects are visible
--- in aggregate (the analytics layer queries with the service role and returns
--- only statistics) but drill-down through these policies requires admin.
--- Rachel and Trish set the policy; this enforces whatever they decide.
+-- Cost data: any active user, every client.
 create policy projects_read on projects
-  for select using (
-    is_active_user() and (confidentiality = 'standard' or is_admin())
-  );
-
+  for select using (is_active_user());
 create policy deliverables_read on deliverables
-  for select using (
-    is_active_user() and exists (
-      select 1 from projects p
-      where p.id = deliverables.project_id
-        and (p.confidentiality = 'standard' or is_admin())
-    )
-  );
-
+  for select using (is_active_user());
+create policy frames_read on document_frames
+  for select using (is_active_user());
 create policy line_items_read on line_items
-  for select using (
-    is_active_user() and exists (
-      select 1 from deliverables d join projects p on p.id = d.project_id
-      where d.id = line_items.deliverable_id
-        and (p.confidentiality = 'standard' or is_admin())
-    )
-  );
-
+  for select using (is_active_user());
 create policy notes_read on estimator_notes
-  for select using (
+  for select using (is_active_user());
+
+-- The Reader Queue. Estimators and admins answer questions and confirm
+-- assumptions; that is the only write path into cost data from the UI.
+-- Everything else is written by the pipeline's service role.
+create policy reader_questions_read on reader_questions
+  for select using (is_active_user());
+
+create policy reader_questions_answer on reader_questions
+  for update using (
     is_active_user() and exists (
-      select 1 from line_items li where li.id = estimator_notes.line_item_id
+      select 1 from profiles
+      where id = auth.uid() and role in ('admin', 'estimator')
     )
   );
 
--- Estimators work the review queue; that is the only write path into cost data
--- from the UI. Everything else is written by the pipeline's service role.
 create policy line_items_review_write on line_items
   for update using (
     is_active_user() and exists (
@@ -415,6 +586,14 @@ create policy line_items_review_write on line_items
       where id = auth.uid() and role in ('admin', 'estimator')
     )
   );
+
+-- Conventions are readable by everyone active — a line item records which were
+-- applied to it, and that has to be inspectable — but only admins edit them,
+-- because a wrong convention propagates across the whole archive.
+create policy conventions_read on reader_conventions
+  for select using (is_active_user());
+create policy conventions_admin_write on reader_conventions
+  for all using (is_admin());
 
 -- Operations tables.
 create policy ingest_runs_read on ingest_runs
@@ -441,11 +620,14 @@ select
   li.uom_canonical,
   u.family                    as unit_family,
   li.quantity,
-  li.unit_cost,
+  li.unit_cost,                             -- as written
   li.total_cost,
   li.cost_per_project_sf,
-  li.escalated_cost_per_project_sf,
   li.pct_of_total,
+  li.basis,
+  li.bare_unit_cost,                        -- the poolable figure
+  li.bare_cost_per_project_sf,
+  li.escalated_bare_cost_per_project_sf,
   li.is_markup,
   li.confidence,
   li.reviewed_at is not null  as human_reviewed,
@@ -454,22 +636,33 @@ select
   d.phase,
   d.issue_date,
   d.estimator,
-  d.markup_treatment,
   d.box_file_url,
   d.is_latest_version,
+  f.markup_factor,
+  f.markup_components,                      -- what was stripped, shown on drill-down
+  f.gsf_used,
+  f.gsf_source,
+  f.pricing_base_date,
+  f.coding_system,
+  -- Surfaces in the result so the confidence gate can demote, and so the UI can
+  -- offer a one-click jump to the pending confirmation. See PLAN §7.
+  f.has_open_assumption,
   p.id                        as project_id,
   p.name                      as project_name,
   p.client_name,
   p.sector,
   p.region,
-  p.gross_sf,
-  p.delivery_method,
-  p.confidentiality
+  p.gross_sf                  as project_gross_sf,
+  p.delivery_method
 from line_items li
-  join deliverables d on d.id = li.deliverable_id
-  join projects     p on p.id = d.project_id
+  join deliverables    d on d.id = li.deliverable_id
+  join document_frames f on f.deliverable_id = d.id
+  join projects        p on p.id = d.project_id
   left join taxonomy t on t.code = li.taxonomy_code
   left join units    u on u.code = li.uom_canonical
 where d.status = 'accepted'
-  and li.is_markup = false;    -- markups are analyzed separately, never pooled
+  and li.is_markup = false     -- markups are analyzed separately, never pooled
                                -- with elemental rates
+  and li.basis <> 'undetermined';  -- a rate whose markup basis the reader could
+                                   -- not establish is not comparable to anything
+

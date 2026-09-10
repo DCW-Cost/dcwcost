@@ -1,7 +1,17 @@
 # DCW Team Intranet + Historical Cost Database
 
-**Build plan — v1, 9 September 2026**
+**Build plan — v2, 10 September 2026**
 Prepared from the Rachel/Lacie calls of 9 September and 12 March.
+
+> **Changed in v2.** Ingestion is now built around an **AI reader** that
+> comprehends each cost plan before extracting from it — modelled on the
+> MediaPact reader for media kits and rate cards. It asks when it can't
+> decipher a coding system, proposes an assumption and requests confirmation
+> when a plan has no gross area, and works out for itself which figures in a
+> document are the real source of truth when markups and contingencies are
+> handled inconsistently. Client confidentiality tiering is removed: every team
+> member sees every client, matching how Airtable works today. Sections 5, 6, 7,
+> 9, 11 and 12 changed; §6 is substantially new.
 
 ---
 
@@ -17,16 +27,21 @@ estimator's real question:
 > What have we actually charged, is that number trustworthy, and where is it
 > heading?"*
 
-Three capabilities make that possible, and each is an explicit ask from the
-9 September call:
+Four capabilities make that possible:
 
-1. **Normalize.** Every historical line item is converted into the unit the
-   estimator asks for — `$/SF`, `$/CY`, `$/LF`, `% of total` — regardless of how
-   it was originally priced.
-2. **Judge.** The tool reports a range, discards statistical anomalies, and
+1. **Read.** An AI reader works through each historical cost plan the way an
+   experienced estimator would — establishing what kind of document it is, how
+   it's coded, what it's priced against, and where its markups live — before it
+   extracts a single number. Where it can't resolve something, it asks a person
+   rather than guessing.
+2. **Normalize.** Every line item is converted into the unit the estimator asks
+   for — `$/SF`, `$/CY`, `$/LF`, `% of total` — regardless of how it was
+   originally priced, and onto a consistent bare-or-loaded basis regardless of
+   how that document handled markups.
+3. **Judge.** The tool reports a range, discards statistical anomalies, and
    states plainly whether the underlying data is good enough to price from.
    When it isn't, it says *"insufficient data — price this manually."*
-3. **Project.** Where pricing has moved consistently over time, the tool
+4. **Project.** Where pricing has moved consistently over time, the tool
    escalates historical numbers to today's dollars and reports the trend.
 
 Rachel's framing is the north star for the schema: *"What they need to know is
@@ -77,17 +92,18 @@ cannot render the interface. That's the whole argument.
      │
      │   one-way sync, every 15 min, read-only
      ▼
-  Supabase / Postgres  ◄──── ingestion pipeline ◄──── Box (source documents)
-     │   projects (mirror) · deliverables · line_items · taxonomy
-     │   uom_conversions · cost_indices · estimator_notes · audit
+  Supabase / Postgres  ◄──── the Cost Reader ◄──── Box (source documents)
+     │   projects (mirror) · deliverables · document_frames · line_items
+     │   taxonomy · units · cost_indices · reader_questions
+     │   reader_conventions · estimator_notes · audit
      │
      ▼
   /teamintranet  (Astro SSR on the existing dcwcost.com Netlify site)
-     Cost Library · Cost Plan Builder · Review Queue · Admin
+     Cost Library · Cost Plan Builder · Reader Queue · Admin
 ```
 
 Airtable remains authoritative for anything a human types. Postgres is
-authoritative only for what the pipeline extracts from cost documents. There is
+authoritative only for what the reader extracts from cost documents. There is
 exactly one direction of data flow, so the two can never disagree about a
 project's name or due date.
 
@@ -164,15 +180,20 @@ out, whether or not anyone remembers to revoke the profile.
 
 | Role | Can do |
 |---|---|
-| `admin` | Everything, plus approve/revoke users and view the audit log |
-| `estimator` | Query the library, build cost plans, work the review queue |
-| `viewer` | Query the library read-only; no exports of client-identified data |
+| `admin` | Everything, plus approve/revoke users, answer reader questions, edit learned conventions, view the audit log |
+| `estimator` | Query the library, build cost plans, answer reader questions |
+| `viewer` | Query the library read-only |
 | `pending` | Holding page only |
 
 Every rule above is enforced in Postgres **row-level security**, not in the UI.
 RLS is deny-by-default on every table; a bug in an Astro page cannot leak a row
 that policy forbids. The service-role key never reaches the browser — all
 database access goes through server-rendered routes and server endpoints.
+
+**All active users see all clients.** This matches how Airtable works today, so
+the intranet introduces no exposure that doesn't already exist. The access
+question is therefore binary — approved, or not — which keeps both the policy
+and the code simple.
 
 ---
 
@@ -191,34 +212,39 @@ Full DDL is in [`schema.sql`](./schema.sql). The reasoning behind it:
   different from a cost estimate."* Mixing a review of someone else's numbers
   into DCW's own pricing history would poison every statistic downstream, so
   type is a first-class filter everywhere.
-  Also carries `design_phase` (concept / SD / DD / CD / bid), `estimator`,
-  `issue_date`, `box_file_url`, and `version` — Airtable's version history maps
-  straight onto this.
+- **`document_frames`** — **new in v2.** The reader's comprehension of a single
+  document, recorded before any line item is extracted: coding system, gross
+  area and where it came from, markup structure, pricing base date, whether the
+  document reconciles. Every downstream number depends on this being right, so
+  it is stored explicitly, with a confidence per field, rather than being
+  implicit in the extraction. See §6.2.
 - **`line_items`** — the observation. Keeps *both* the raw and the normalized
-  form of everything: `raw_description` next to `taxonomy_code`,
-  `uom_raw` next to `uom_canonical`. The raw column is never overwritten, so a
-  bad mapping is always recoverable and always auditable.
+  form of everything: `raw_description` next to `taxonomy_code`, `raw_uom` next
+  to `uom_canonical`, and the as-written rate next to the bare-basis rate. The
+  raw columns are never overwritten, so a bad mapping — or a wrong assumption
+  later corrected — is always recoverable and always auditable.
 - **`estimator_notes`** — assumptions, exclusions, clarifications attached to a
   line item. This is Rachel's *"everything every estimator has said"*
   requirement, and it is the thing that makes the tool trusted rather than
   merely correct.
+- **`reader_questions`** and **`reader_conventions`** — **new in v2.** What the
+  reader asked, what a human answered, and the rules learned from those answers.
+  See §6.4 and §6.5.
 
 ### 5.2 The taxonomy
 
 `a 10 foundations` in the plan Lacie read out on the call is **UniFormat II
-(ASTM E1557) code A10 — Foundations**. If that holds across the archive — and
-it should, since it's the standard for elemental cost planning — DCW's cost
-plans are *already coded*, and the taxonomy is a solved problem rather than an
-NLP problem.
+(ASTM E1557) code A10 — Foundations**, so at least some of the archive is
+already coded to the standard. **UniFormat is the spine** (Levels 1–3), with CSI
+MasterFormat carried as a secondary mapping for trade-level detail.
 
-So: **UniFormat is the spine** (Levels 1–3), with CSI MasterFormat carried as a
-secondary mapping for trade-level detail where estimators used it. Raw
-descriptions map onto the spine; anything unmappable lands in the review queue
-rather than being silently guessed at.
+In v1 this plan treated "is UniFormat used consistently?" as a blocking
+question. It isn't any more. The reader establishes the coding system per
+document, maps whatever it finds onto the spine, and asks when it can't —
+see §6.4. Inconsistency across the archive is now an expected condition the
+system handles, not a precondition for starting.
 
-*→ Confirm with Rachel (Q1 in §12). This assumption is load-bearing.*
-
-### 5.3 The normalization strategy — the hard part
+### 5.3 Normalization — the hard part
 
 Rachel put her finger on the real difficulty: *"you can't have mixed units in
 the same sort of… it just kind of makes it messy."* She's right, and the fix is
@@ -227,7 +253,7 @@ normalizations** for every line item:
 
 | Normalization | Always computable? | Good for |
 |---|---|---|
-| **`$/project GSF`** | Yes, whenever project GSF is known | The universal comparator — works for lump sum, LF, CY, everything |
+| **`$/project GSF`** | Yes, whenever gross area is known | The universal comparator — works for lump sum, LF, CY, everything |
 | **`% of project total`** | Yes | Sanity-checking scope and mix; the `3%` in the plan on the call |
 | **`$/native unit`** | Only when a quantity is present | Apples-to-apples within a unit family (CY of concrete vs. CY of concrete) |
 
@@ -236,17 +262,58 @@ lump-sum problem entirely: a lump-sum elevator package can't be converted to
 `$/EA` without a count, but it absolutely can be expressed as `$/GSF` of the
 building. Every observation gets a comparable number.
 
-The `uom_conversions` table then handles the genuine unit math within families —
-SF↔SM, LF↔LM, CY↔CF, TON↔LB. **It deliberately does not convert across
-families.** A lump sum is not secretly 400 lineal feet, and the tool will never
-pretend otherwise; it reports `$/GSF` and `%` for that row and marks
-`$/native unit` as not applicable.
+The `units` table handles genuine unit math within families — SF↔SM, LF↔LM,
+CY↔CF, TON↔LB. **It deliberately does not convert across families.** A lump sum
+is not secretly 400 lineal feet, and the tool will never pretend otherwise; it
+reports `$/GSF` and `%` for that row and marks `$/native unit` as not
+applicable.
 
-### 5.4 Escalation
+### 5.4 The fourth normalization: bare vs. loaded
+
+**New in v2**, and the direct answer to *"if markups or contingencies are
+handled in different ways, the AI should discern which data points are the
+correct sources of truth."*
+
+The problem is real and it is the biggest threat to data quality in the whole
+project. If one estimator's `A10 Foundations` line is $10.59/SF bare, and
+another's is $13.20/SF already carrying general conditions, fee and design
+contingency, then pooling them produces a number that is wrong in a way nobody
+can see.
+
+So the reader determines, per document, **where the markups live** — applied
+inside each element line, or added as a block at the bottom — and what the stack
+consists of (general conditions, GC's fee, design and construction contingency,
+escalation, bond and insurance). From that it derives a single **markup factor**
+for the document.
+
+Each line item then stores both:
+
+- `unit_cost` — exactly as written in the document, never altered
+- `bare_unit_cost` — the same rate reduced to a bare basis using the document's
+  markup factor
+
+The library pools on the **bare** basis by default, which is the only basis on
+which the archive is internally consistent. The estimator can toggle to a loaded
+view, and the tool applies a current markup stack to the bare median rather than
+averaging a mix of the two. Which markups were stripped is shown on every result
+and on every source row, so the arithmetic is never hidden.
+
+When the reader can't determine the markup structure with confidence, that
+document's rates are tagged `basis = unknown`, held out of the default pool, and
+raised as a question.
+
+### 5.5 Escalation
 
 Comparing a 2024 dollar to a 2026 dollar without adjustment produces garbage,
 and it silently corrupts trend detection. Every observation is escalated to
 today before it is pooled.
+
+One subtlety the reader handles: **a document's pricing base date is often not
+its issue date.** Estimates are frequently priced to a projected midpoint of
+construction, and escalating from the wrong date introduces error in exactly the
+dimension we're trying to measure. The reader captures the stated base date from
+the document, falls back to the issue date when none is given, and records which
+it used.
 
 `cost_indices` holds a quarterly index per region. Start by deriving DCW's own
 internal index from repeat line items in its own archive — that measures DCW's
@@ -256,73 +323,175 @@ always be reproduced.
 
 ---
 
-## 6. Ingestion
+## 6. The Cost Reader
+
+**Substantially new in v2.** The model here is the MediaPact reader for media
+kits and rate cards: point it at a document nobody standardized, and it works
+out the structure rather than requiring one.
+
+A DCW cost plan is harder than a rate card in one specific way — the numbers on
+the page only mean something in the context of how the document was built. The
+same `$13.20` is a different fact depending on whether it's loaded, what area
+it's priced against, and what date it's priced to. So the reader is built
+around a rule: **understand the document before extracting from it.**
 
 ### 6.1 Getting the documents
 
 Airtable's Cost Database base already links every deliverable to its Box file —
 that work is done. The pipeline reads that table via the Airtable API, follows
 `project_folder_link` into Box, and pulls the `.xlsx` or `.pdf` via a Box
-service account (JWT / client-credentials app).
+service account.
 
 Rachel's `report uploaded` view (~70 vetted records) is the pilot set. The full
 grid view (1,235 deliverables) is the backfill.
 
-### 6.2 Two lanes, deterministic first
+Excel and PDF are prepared differently before the reader sees them. Excel is
+read cell-by-cell with structure and formulas intact, which preserves far more
+signal than flattening to text — a formula like `=D12*1.18` is direct evidence
+of a markup. PDFs get their text layer extracted first, with OCR reserved for
+genuinely scanned documents.
 
-**Excel lane.** Most DCW deliverables come from DCW's own templates, which
-repeat. A template-fingerprint library plus a grid parser reads those
-deterministically: locate the header row, map columns, pull the numbers. No
-model call, no cost, perfect auditability. This is where most of the volume
-should land.
+### 6.2 Pass one — comprehend the document
 
-**PDF lane.** Extract the text layer first (`pdfplumber`); OCR only genuinely
-scanned documents. Then Claude structures the extracted text.
+Before extracting anything, the reader establishes the document's **frame** and
+writes it to `document_frames`:
 
-**Model extraction, where it's needed.** `claude-sonnet-5` for bulk,
-`claude-opus-5` for documents the bulk pass flags as low-confidence. Three rules
-keep this trustworthy:
+| What it determines | Why it matters |
+|---|---|
+| Deliverable type | An estimate review must never be pooled with DCW's own pricing |
+| Coding system in use | UniFormat, MasterFormat, an in-house scheme, or none |
+| Gross area, and its source | The denominator for every `$/GSF` figure |
+| Markup structure and factor | Whether element rates are bare or loaded (§5.4) |
+| Pricing base date | The starting point for escalation (§5.5) |
+| Stated project total | The check figure for pass three |
 
-1. **Strict structured output.** A JSON schema, `strict: true`, no prose.
-2. **Extraction only — never arithmetic.** The model reads numbers off the page.
-   Every total, conversion, and statistic is computed afterward in SQL or
-   Python. A model that is not allowed to do math cannot get math wrong.
-3. **Provenance on every field.** Sheet name and cell range, or PDF page and
-   bounding box, plus a confidence score. Every number in the library can be
-   traced back to the exact spot in the exact document it came from.
+The reader has tools available while it does this — it can search the document
+for a term it expects but hasn't found, and it can look the project up in
+Airtable to cross-check an area or a delivery method against what DCW already
+recorded. That cross-check is what turns a blind guess into a supportable
+assumption.
 
-### 6.3 The review queue
+Every field in the frame carries its own confidence and a note on where the
+answer came from.
 
-Anything below the confidence threshold, and anything that can't be mapped to
-the taxonomy, goes into a review screen in the intranet: extracted rows on the
-left, source document on the right, accept / correct / reject.
+### 6.3 Pass two — extract against the frame
+
+Only now does the reader pull line items, and it does so knowing what the
+document's conventions are. Two rules keep this trustworthy:
+
+1. **The reader interprets; it never calculates.** It decides what a figure
+   *means* — which code it belongs to, whether it's loaded, what it's priced
+   against. Every number that enters the library as arithmetic (unit
+   conversions, markup stripping, escalation, every statistic) is computed
+   afterwards in SQL or Python from values the reader read off the page. A
+   reader that isn't allowed to do math can't get math wrong.
+2. **Provenance on every field.** Sheet name and cell range, or PDF page, plus a
+   confidence score. Every number in the library traces back to the exact spot
+   in the exact document it came from.
+
+### 6.4 Pass three — reconcile, then ask
+
+The reader sums what it extracted and compares it against the document's stated
+total. This is the single most valuable check in the pipeline, because it is
+deterministic and it catches the failure modes that matter: a missed section, a
+double-counted subtotal, a misread markup.
+
+Anything the reader could not resolve — including a reconciliation it can't
+explain — becomes a **question**, never a silent guess. Questions come in two
+lanes:
+
+**Blocking questions** hold the document out of the library until answered:
+
+> **Coding system unrecognized.** This plan's rows look like
+> `03 30 00 — Cast-in-place concrete`. That's MasterFormat, not the UniFormat
+> used in most of the archive. Map these onto UniFormat, or keep them as
+> MasterFormat detail under a UniFormat parent?
+
+> **Markup basis undetermined.** There's a 22% block at the bottom labelled
+> "GC's / Fee / Contingency", but three element lines on p.4 appear to already
+> include their own contingency. I can't tell whether that block applies to
+> everything or only to the unmarked elements. Which is it?
+
+**Assumptions awaiting confirmation** don't block — the reader proposes an
+answer, states its evidence, and the data is usable while it waits:
+
+> **No gross area on the cover sheet.** I found `62,400 SF` in the summary block
+> on page 2, and the elemental totals reconcile against it to within 0.3%.
+> Airtable records 62,400 SF for this project. **Assuming 62,400 GSF** —
+> confirm?
+
+> **Pricing base date not stated.** The escalation line references
+> "midpoint Q2 2027", so I've taken the base date as the issue date and treated
+> escalation to Q2 2027 as a markup rather than as the base. Confirm?
+
+An assumption that goes unanswered stays visible on every result derived from
+it. If it is later corrected, the affected rows are recomputed — this works
+precisely because raw values are never overwritten (§5.1).
+
+### 6.5 Answers teach the reader
+
+This is what makes 1,235 documents tractable rather than exhausting.
+
+When Rachel answers *"yes, Brian's 2024 plans use MasterFormat, map them this
+way,"* that resolution is stored in `reader_conventions` as a rule scoped to
+what it actually depends on — an estimator, a template fingerprint, a date
+range, a client. Every subsequent document matching that scope applies the rule
+automatically and does not ask again.
+
+Practically, this means question volume should fall sharply as the backfill
+proceeds: the first few dozen documents from an era teach the reader that era's
+conventions, and the rest run clean. Conventions are visible and editable in
+the Admin panel, and every line item records which conventions were applied to
+it, so a convention that turns out to be wrong can be corrected and its
+consequences replayed.
+
+### 6.6 The Reader Queue
+
+Questions and pending confirmations surface in the intranet as a working
+screen: the reader's question on the left with its evidence, the source document
+on the right, answer and move on. Estimators and admins can both work it.
 
 This is not just data hygiene. It is how the estimating team comes to trust the
-tool — they will believe numbers they have personally signed off on, and they
-will not believe numbers that appeared by magic. Budget real time for it.
+tool — they will believe numbers they have personally adjudicated, and they will
+not believe numbers that appeared by magic. Budget real time for it, especially
+in Phase 1.
 
-### 6.4 What the backfill actually costs
+### 6.7 What the backfill costs
 
 Lacie's concern on the call — *"if the volume of these estimates isn't going to
 trip any sort of blocks and charge us an exorbitant amount of money"* — deserves
 a real number rather than a shrug.
 
-Worst case, assuming **every** one of the 1,235 documents goes through the model
-(no Excel fast path at all), at roughly 8K input and 4K output tokens per
-document:
+The three-pass reader costs meaningfully more than v1's single-shot extraction,
+because the document is read more than once. Recommended architecture splits the
+work by what it actually demands: **judgment passes on Opus 5** (framing the
+document, reconciling, deciding what to ask) and **the mechanical extraction
+pass on Sonnet 5**, which is following a frame that has already been
+established.
 
-| Path | Input | Output | Total |
+Worst case, assuming **every** one of the 1,235 documents goes through the full
+three passes with no Excel shortcuts and no caching:
+
+| Approach | Reading | Writing | Total, once |
 |---|---|---|---|
-| Sonnet 5, standard | 9.9M × $2/M = $20 | 4.9M × $10/M = $49 | **≈ $69** |
-| Sonnet 5, Batch API (−50%) | $10 | $25 | **≈ $35** |
-| Opus 5, standard | 9.9M × $5/M = $50 | 4.9M × $25/M = $124 | **≈ $174** |
-| Opus 5, Batch API (−50%) | $25 | $62 | **≈ $87** |
+| **Mixed, batched** — recommended | $76 | $60 | **≈ $136** |
+| Mixed, standard rates | $151 | $121 | **≈ $272** |
+| All Sonnet 5, batched — cheapest | $32 | $43 | **≈ $75** |
+| All Opus 5, standard — the ceiling | $161 | $216 | **≈ $377** |
 
-**The entire two-year backfill costs somewhere between $35 and $175, once.** The
-70-document pilot is under $10. Prompt caching on the shared system prompt and
-the Excel fast path both push the real figure toward the bottom of that range.
+**The entire two-year backfill costs between $75 and $375, once.** The 70-document
+pilot is under $25.
 
-This is not a budget concern. It should not be treated as one on Friday.
+Two things push the real figure toward the bottom of that range. The document
+text is re-sent across all three passes, which is exactly what prompt caching is
+for — cached reads cost about a tenth of fresh ones. And most DCW deliverables
+come from DCW's own Excel templates, where a template-fingerprint parser handles
+the mechanical extraction pass at no model cost at all, leaving the reader to do
+only the framing and the reconciliation.
+
+Roughly double v1's estimate, for a system that understands what it's reading.
+It remains a rounding error against a single estimator-hour, and it should not
+be treated as a budget question on Friday.
 
 ---
 
@@ -330,23 +499,27 @@ This is not a budget concern. It should not be treated as one on Friday.
 
 This is the part that makes it a tool rather than a filing cabinet.
 
-An estimator queries: *category + target unit + filters* (sector, region, GSF
-band, delivery method, design phase, date range). The engine:
+An estimator queries: *category + target unit + basis + filters* (sector,
+region, GSF band, delivery method, design phase, date range). The engine:
 
 1. **Filters** to comparable observations — including by deliverable type, so
-   estimate reviews never contaminate DCW's own pricing.
-2. **Escalates** every observation to today's dollars.
-3. **Log-transforms.** Construction costs are right-skewed and roughly
+   estimate reviews never contaminate DCW's own pricing, and excluding any
+   document whose markup basis the reader couldn't determine.
+2. **Puts everything on one basis** — bare by default (§5.4), with the applied
+   markup stack shown.
+3. **Escalates** every observation to today's dollars from its own pricing base
+   date (§5.5).
+4. **Log-transforms.** Construction costs are right-skewed and roughly
    log-normal; running statistics on raw dollars overstates the mean and
    mislabels legitimate high-end projects as outliers.
-4. **Rejects outliers** using **median absolute deviation**, modified z-score
+5. **Rejects outliers** using **median absolute deviation**, modified z-score
    `|Mz| > 3.5`, with a 1.5×IQR fence as a cross-check. *Not* mean ± 2σ — that
    test is unreliable at the sample sizes involved (often n < 20) and lets a
    single extreme value drag the threshold out past itself.
-5. **Reports** n, median, mean, p10 / p25 / p75 / p90, min, max, and coefficient
+6. **Reports** n, median, mean, p10 / p25 / p75 / p90, min, max, and coefficient
    of variation — plus every excluded outlier, named, with the reason. Nothing
    is thrown away invisibly.
-6. **Detects trend** with a **Theil–Sen** estimator on escalation-neutral
+7. **Detects trend** with a **Theil–Sen** estimator on escalation-neutral
    residuals — robust to outliers and honest at small n. A trend is surfaced
    only at n ≥ 8 and p < 0.10; otherwise the tool says there isn't enough signal
    rather than drawing a line through four points.
@@ -361,15 +534,19 @@ Every result carries a traffic light:
 
 | | Criteria (all must hold) | Meaning |
 |---|---|---|
-| 🟢 **Green** | n ≥ 8 after outlier removal · CV ≤ 0.25 · ≥ 3 distinct projects · ≥ 2 distinct estimators · most recent observation within 18 months | Price from this |
-| 🟡 **Amber** | n 4–7, or CV 0.25–0.50, or newest observation 18–36 months old | Useful, but apply judgment |
+| 🟢 **Green** | n ≥ 8 after outlier removal · CV ≤ 0.25 · ≥ 3 distinct projects · ≥ 2 distinct estimators · most recent observation within 18 months · no unconfirmed reader assumptions in the pool | Price from this |
+| 🟡 **Amber** | n 4–7, or CV 0.25–0.50, or newest observation 18–36 months old, or some observations rest on unconfirmed assumptions | Useful, but apply judgment |
 | 🔴 **Red** | n < 4, or CV > 0.50, or all observations from a single project or single estimator | Insufficient — research and price manually |
 
-Two design rules that matter more than the thresholds:
+Three design rules that matter more than the thresholds:
 
 - **The reason always ships with the colour.** Never a bare red light — always
   *"Red: only 2 observations, both from Ballard Library, 2024."* An estimator
   can act on that; they cannot act on a colour.
+- **Unconfirmed assumptions are visible in the result.** If three of eleven
+  observations rest on an assumed gross area the reader hasn't had confirmed,
+  the result says so and offers a one-click jump to confirm them. Answering
+  the question can move the light from amber to green on the spot.
 - **The thresholds are configurable by an admin and versioned.** Rachel and the
   estimating team will want to tune them once they see real output, and they
   should be able to without a deploy.
@@ -377,56 +554,58 @@ Two design rules that matter more than the thresholds:
 ### Drill-down
 
 Every statistic is clickable, down to the list of source observations: project,
-client, estimator, date, phase, the original description, the estimator's notes,
-and a link straight to the document in Box. That drill-down *is* Rachel's
-*"everything every estimator has said about each line item"* — delivered.
+client, estimator, date, phase, the original description, the markups stripped,
+the assumptions applied, the estimator's own notes, and a link straight to the
+document in Box. That drill-down *is* Rachel's *"everything every estimator has
+said about each line item"* — delivered.
 
 ---
 
 ## 8. What the estimator actually uses
 
-**Cost Library** — search or browse the UniFormat tree. Pick a target unit. Set
-filters. Get the statistics card, the confidence light, the trend, and the
-source list.
+**Cost Library** — search or browse the UniFormat tree. Pick a target unit and
+basis. Set filters. Get the statistics card, the confidence light, the trend,
+and the source list.
 
 **Cost Plan Builder** — the payoff, and the "automate inputs for future cost
 plans" requirement. Enter the project shell (GSF, sector, region, phase,
 delivery method). The tool generates a UniFormat line-item template with a
 suggested rate per element, each carrying its own confidence light and its own
 drill-down. The estimator accepts, overrides, or leaves red items blank to price
-by hand — and every override is captured with a reason, which becomes training
-data for the next version. Export to DCW's Excel deliverable format.
+by hand — and every override is captured with a reason, which becomes signal for
+the next version. Export to DCW's Excel deliverable format.
 
-**Review Queue** — low-confidence extractions awaiting human confirmation.
+**Reader Queue** — the reader's open questions and pending confirmations,
+worked against the source document side by side (§6.6).
 
-**Admin** — user approval and revocation, role assignment, ingest run history,
-confidence thresholds, escalation index management, audit log.
+**Admin** — user approval and revocation, role assignment, reader conventions,
+ingest run history, confidence thresholds, escalation index management, audit
+log.
 
 ---
 
 ## 9. Security and data privacy
 
-Cost data is DCW's most commercially sensitive asset, and much of it is
-client-confidential. Non-negotiables:
+Cost data is DCW's most commercially sensitive asset. Non-negotiables:
 
 - **Entra ID SSO**, domain-locked, plus explicit admin approval. Two gates, not
   one.
 - **RLS deny-by-default on every table.** Policy lives in the database. The
   service-role key never reaches the browser.
-- **Client confidentiality tiering.** A `confidentiality` flag on `projects`.
-  Aggregate statistics are always available to any active user; drilling through
-  to a *named* client or project on a restricted engagement requires elevated
-  role. Rachel and Trish set that policy — the schema just enforces whatever
-  they decide.
+- **All active users see all clients** — as they do in Airtable today. No
+  per-client tiering is being built. If a future client contract ever requires
+  ring-fencing, it's a flag on `projects` and one additional policy clause, but
+  building it speculatively would add friction for a problem DCW doesn't have.
 - **Documents stay in Box.** The database stores extracted values and links, not
   copies of client deliverables. This deliberately keeps DCW's document
   ownership story exactly where it is today, which was Rachel's concern.
-- **API, not consumer tooling.** Extraction runs through the Anthropic API,
+- **API, not consumer tooling.** The reader runs through the Anthropic API,
   where inputs and outputs are not used for model training by default. This is
   the material difference from pasting client cost plans into a chat window, and
   it's worth stating plainly to the team on Friday.
-- **Full audit log** — every query, every export, every admin action, with actor
-  and timestamp.
+- **Full audit log** — every query, every export, every reader answer, every
+  admin action, with actor and timestamp. Reader answers are attributed, because
+  a convention learned from a wrong answer needs to be traceable to who gave it.
 - **Backups.** Supabase point-in-time recovery. Airtable remains the independent
   operational record, so no single failure loses both.
 
@@ -440,8 +619,11 @@ Scope deliberately narrow and deliberately honest:
 
 - `/teamintranet` live behind Microsoft sign-in, with real accounts for Rachel,
   Trish, Brian, and Lacie, and the approval panel working.
-- 10–20 hand-picked deliverables from the `report uploaded` view, ingested end
-  to end.
+- 10–20 hand-picked deliverables from the `report uploaded` view, read end to
+  end — **including at least one document that makes the reader ask something**,
+  so the queue is demonstrated rather than described. A plan with no stated
+  gross area is the ideal candidate: it shows the assumption, the evidence, and
+  the confirmation in one screen.
 - **One or two UniFormat categories deep** — A10 Foundations and B20 Exterior
   Enclosure are good candidates — showing the full loop: query → normalized
   range → confidence light → drill-down → link to the source document in Box.
@@ -452,8 +634,9 @@ oversold one — and Rachel has already noted this team doesn't hand out
 enthusiasm easily.
 
 ### Phase 1 — pilot (weeks 1–3)
-Airtable sync running. All ~70 vetted reports ingested. Review queue live and
-worked by an estimator. Taxonomy confirmed against real documents.
+Airtable sync running. All ~70 vetted reports read. Reader Queue live and worked
+by an estimator — this is where the archive's real conventions get discovered
+and taught. Taxonomy and markup handling confirmed against actual documents.
 
 ### Phase 2 — backfill and intelligence (weeks 4–8)
 All 1,235 deliverables. Escalation index built and validated. Outlier rejection,
@@ -472,39 +655,51 @@ in hand. Not now.
 
 | Risk | Mitigation |
 |---|---|
-| **Scope inconsistency between estimators.** Two "A10 Foundations" lines may include different work — one loaded with GCs and contingency, one bare. This is the single biggest threat to data quality, and no amount of statistics fixes it. | Capture markup/contingency treatment as an explicit field per deliverable; filter on it; let the confidence gate widen CV and go amber when scope varies. Confirm the convention with Rachel (Q3). |
-| Older deliverables (2024) are messy — Rachel's own note. | Ingest newest-first. Recency weighting matters more than volume for pricing anyway. |
-| The estimating team doesn't adopt it. | The review queue puts their hands on the data early; the drill-down means they can always verify a number rather than trusting it. |
+| **The reader frames a document wrongly and does it confidently.** A misread markup structure or gross area corrupts every line item in that document, and it corrupts them plausibly. | The reconciliation check in §6.4 catches most of it deterministically — a wrong frame usually fails to add up. Beyond that: frames are stored explicitly with per-field confidence, low confidence goes to the queue, and raw values are never overwritten so a corrected frame replays cleanly. |
+| **Question fatigue.** If the reader asks about every document, nobody works the queue and the project stalls. | Learned conventions (§6.5) are the answer — the point is that question volume falls as the backfill proceeds. Track questions-per-document as a headline metric during Phase 1; if it isn't dropping, the convention scoping is wrong and needs fixing before Phase 2. |
+| **A wrong answer teaches a wrong convention** and propagates silently. | Conventions are visible and editable in Admin, every line item records which were applied, answers are attributed in the audit log, and corrections replay. |
+| Older deliverables (2024) are messy — Rachel's own note. | Ingest newest-first. Recency weighting matters more than volume for pricing anyway, and the reader learns recent conventions before it meets the awkward ones. |
+| The estimating team doesn't adopt it. | The Reader Queue puts their hands on the data early and makes them the authority; the drill-down means they can always verify a number rather than trusting it. |
 | Airtable API rate limits (5 req/sec) during backfill. | Batch, cache, and sync incrementally on `last_modified`. Not a real constraint at this scale. |
-| Extraction errors quietly enter the library. | Confidence thresholds, human review below threshold, full provenance on every field, and reversible raw columns. |
 | Scope creep into replacing Softr. | Explicitly deferred to Phase 4. Already agreed on the 9 September call. |
 
 ---
 
-## 12. Open questions for Rachel
+## 12. Questions
 
-These block or reshape parts of the build. Worth twenty minutes at the 3pm.
+### Answered — 10 September
 
-1. **Is UniFormat coding consistent** across all years and all estimators? The
-   `A10` in the plan we looked at suggests yes. If it's inconsistent, §5.2 grows
-   a mapping layer and the pilot gets longer.
-2. **Does every cost plan carry project GSF** on the cover sheet? `$/GSF` is the
-   universal comparator — without GSF an observation can only be compared by
-   percentage.
-3. **How are markups, GCs, escalation, and contingency handled** — as line items
-   inside the elemental breakdown, or as a separate block at the bottom? This
-   determines whether line-item rates are bare or loaded, and it must be
-   consistent to compare anything.
-4. **Client confidentiality:** can any DCW employee see any client's numbers, or
-   are some engagements restricted? Trish should weigh in.
-5. **Box access:** service account, or per-user OAuth? Service account is
+- **Does every cost plan carry gross area?** Doesn't need to. The reader looks
+  for it, cross-checks Airtable, proposes an assumption with its evidence, and
+  asks for confirmation. Documents without a stated area are ingestible.
+- **How are markups and contingencies handled?** Inconsistently, and that's now
+  the reader's job rather than a precondition. It determines the structure per
+  document, derives a markup factor, and stores both the as-written and bare
+  rates so the library can pool on one basis (§5.4).
+- **Is UniFormat coding consistent?** No longer blocking. The reader identifies
+  the coding system per document, maps what it finds, and asks when it can't
+  (§6.4). Still useful to know roughly how mixed the archive is, for sizing
+  Phase 1 — but it no longer gates the build.
+- **Who can see which clients?** Everyone sees everything, matching Airtable
+  today. No confidentiality tiering is being built (§9).
+
+### Still open
+
+1. **Who answers reader questions?** A designated estimator, Rachel, or whoever
+   owns the project? This is an operational decision that shapes the queue's
+   routing and notifications, and it matters more than it sounds — the queue
+   only works if someone owns it.
+2. **What reconciliation tolerance counts as clean?** A ±1% gap between summed
+   line items and the stated total is probably rounding; ±8% is a missed
+   section. Rachel's judgment on where the line sits will save a lot of noise.
+3. **Box access:** service account, or per-user OAuth? Service account is
    simpler for the pipeline; per-user is stricter.
-6. **Airtable plan tier** — record caps and API limits, so we size the sync
+4. **Airtable plan tier** — record caps and API limits, so we size the sync
    correctly.
-7. **Escalation index:** derive DCW's own from the archive, or subscribe to a
+5. **Escalation index:** derive DCW's own from the archive, or subscribe to a
    published PNW index? Recommend deriving internally and cross-checking
    against ENR Seattle CCI.
-8. **Version history:** when a deliverable was reissued, is the latest version
+6. **Version history:** when a deliverable was reissued, is the latest version
    the only one that counts, or is each issuance a legitimate observation?
    Recommend keeping all versions, flagged, and defaulting queries to the
    latest.
@@ -516,7 +711,8 @@ These block or reshape parts of the build. Worth twenty minutes at the 3pm.
 | Who | What |
 |---|---|
 | Rachel | Airtable account for Lacie + share the DCW and Cost Database bases (exclude the HR base with health insurance and 401k data) |
-| Rachel | Answers to §12, especially Q1–Q3 |
+| Rachel | Answers to §12 "still open", especially Q1 and Q2 |
+| Rachel | If possible, flag 2–3 documents you already know are awkward — a missing area, an odd markup block, unusual coding. They're the most valuable pilot inputs, because they exercise the reader rather than flatter it. |
 | Lacie | Stand up Supabase, wire Entra ID sign-in, build the `/teamintranet` shell and admin panel |
-| Lacie | Ingest 10–20 pilot documents; get one category rendering end to end for Friday |
+| Lacie | Build the reader's three passes; run 10–20 pilot documents; get one category rendering end to end for Friday |
 | Both | Walk the Phase 0 demo before Friday, and agree what is explicitly *not* claimed to be finished |
