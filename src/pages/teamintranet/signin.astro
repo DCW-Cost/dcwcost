@@ -1,0 +1,149 @@
+---
+import '../../styles/intranet.css';
+import { authConfigured, ALLOWED_DOMAIN } from '../../lib/intranet/auth.ts';
+
+export const prerender = false;
+
+const error = Astro.url.searchParams.get('error');
+const next = Astro.url.searchParams.get('next') ?? '/teamintranet/';
+const signinHref = `/teamintranet/auth/signin?next=${encodeURIComponent(next)}`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Sign in — DCW Team Intranet</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      .signin-wrap {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem 16px;
+      }
+      .signin-card {
+        width: 100%;
+        max-width: 27rem;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 2rem 1.75rem;
+      }
+      .signin-card h1 {
+        font-family: var(--brand);
+        font-weight: 800;
+        text-transform: uppercase;
+        font-size: 1.15rem;
+        letter-spacing: 0.02em;
+        color: var(--ink);
+        margin: 0 0 0.2rem;
+      }
+      .signin-card .sub {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--faint);
+        margin-bottom: 1.6rem;
+        display: block;
+      }
+      .ms-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.6rem;
+        width: 100%;
+        padding: 0.7rem 1rem;
+        font-family: var(--ui);
+        font-size: 0.92rem;
+        font-weight: 600;
+        border: 1px solid var(--line-2);
+        border-radius: 3px;
+        background: var(--paper);
+        color: var(--ink);
+        text-decoration: none;
+      }
+      .ms-btn:hover { border-color: var(--blue); }
+      .gates { list-style: none; margin: 1.6rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.55rem; }
+      .gates li {
+        display: grid;
+        grid-template-columns: 1.3rem 1fr;
+        gap: 0.5rem;
+        font-size: 0.83rem;
+        color: var(--muted);
+        align-items: baseline;
+      }
+      .gates .n { font-family: var(--mono); font-size: 0.72rem; color: var(--blue); }
+      .err {
+        background: var(--stop-bg);
+        border: 1px solid var(--stop-line);
+        color: var(--stop);
+        border-radius: 3px;
+        padding: 0.6rem 0.8rem;
+        font-size: 0.84rem;
+        margin-bottom: 1.2rem;
+        overflow-wrap: anywhere;
+      }
+      .notconf {
+        background: var(--hold-bg);
+        border: 1px solid var(--hold-line);
+        border-radius: 3px;
+        padding: 0.7rem 0.85rem;
+        font-size: 0.84rem;
+        margin-bottom: 1.2rem;
+      }
+      .notconf b { display: block; color: var(--hold); margin-bottom: 0.2rem; }
+      .notconf code { font-family: var(--mono); font-size: 0.78rem; }
+    </style>
+  </head>
+  <body class="intranet">
+    <div class="signin-wrap">
+      <div class="signin-card">
+        <h1>DCW Cost Library</h1>
+        <span class="sub">/teamintranet</span>
+
+        {error && <div class="err">{error}</div>}
+
+        {
+          authConfigured ? (
+            <a class="ms-btn" href={signinHref} rel="nofollow">
+              <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+                <rect x="0" y="0" width="8.4" height="8.4" fill="#f25022" />
+                <rect x="9.6" y="0" width="8.4" height="8.4" fill="#7fba00" />
+                <rect x="0" y="9.6" width="8.4" height="8.4" fill="#00a4ef" />
+                <rect x="9.6" y="9.6" width="8.4" height="8.4" fill="#ffb900" />
+              </svg>
+              Sign in with Microsoft
+            </a>
+          ) : (
+            <div class="notconf">
+              <b>Sign-in isn't configured yet</b>
+              This build has no Supabase credentials, so Microsoft sign-in can't run.
+              Set <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> —
+              see <code>docs/team-intranet/SETUP.md</code>.
+            </div>
+          )
+        }
+
+        <ul class="gates">
+          <li><span class="n">1</span><span>Microsoft 365 authenticates you.</span></li>
+          <li>
+            <span class="n">2</span>
+            <span>Your address must be <strong>@{ALLOWED_DOMAIN}</strong>.</span>
+          </li>
+          <li>
+            <span class="n">3</span>
+            <span>An admin approves your account. New accounts wait until then.</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

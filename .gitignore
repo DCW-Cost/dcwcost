@@ -4,9 +4,12 @@ dist/
 node_modules/
 # generated types
 .astro/
-# environment
+# environment — every variant except the committed template
 .env
-.env.production
+.env.*
+!.env.example
+# netlify adapter output
+.netlify/
 # macOS
 .DS_Store
 # logs

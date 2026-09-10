@@ -1,0 +1,196 @@
+---
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import { provider } from '../../../lib/intranet/data/index.ts';
+import { DEFAULT_RULES } from '../../../lib/intranet/stats.ts';
+
+export const prerender = false;
+
+const [pending, active, me] = await Promise.all([
+  provider.getPendingProfiles(),
+  provider.getActiveProfiles(),
+  provider.getCurrentUser(),
+]);
+
+const admins = active.filter((p) => p.role === 'admin');
+---
+
+<IntranetLayout
+  title="Admin"
+  crumb="Admin"
+  section="admin"
+  meta={[`${active.length} active`, `${pending.length} pending`, `${admins.length} admins`]}
+>
+  <div class="pane">
+    {
+      me.role !== 'admin' ? (
+        <div class="card">
+          <div class="empty-state">Admins only.</div>
+        </div>
+      ) : (
+        <>
+          <div class="card">
+            <div class="card-head">
+              <h3>Waiting for approval</h3>
+              <span class="hint">
+                domain-gated to @dcwcost.com · signed in with Microsoft
+              </span>
+            </div>
+            {pending.length ? (
+              <div class="tbl-wrap">
+                <table class="data" style="min-width:620px">
+                  <thead>
+                    <tr>
+                      <th>Person</th>
+                      <th style="width:14rem">Requested</th>
+                      <th style="width:9rem">Role</th>
+                      <th class="r" style="width:14rem">Decision</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pending.map((p) => (
+                      <tr>
+                        <td>
+                          <span class="elem">{p.fullName}</span>
+                          <span class="sub">{p.email}</span>
+                        </td>
+                        <td class="num">
+                          {p.requestedAt
+                            ? new Date(p.requestedAt).toLocaleString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                              })
+                            : '—'}
+                        </td>
+                        <td>
+                          <select
+                            aria-label={`Role for ${p.fullName}`}
+                            style="font-size:.8rem;padding:.22rem .35rem;border:1px solid var(--line-2);border-radius:3px;background:var(--paper);color:var(--ink)"
+                          >
+                            <option>Viewer</option>
+                            <option>Estimator</option>
+                            <option>Admin</option>
+                          </select>
+                        </td>
+                        <td class="r">
+                          <span style="display:inline-flex;gap:.35rem">
+                            <button class="btn primary" type="button">Approve</button>
+                            <button class="btn" type="button">Decline</button>
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div class="empty-state">Nobody waiting.</div>
+            )}
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Active people</h3>
+              <span class="hint">everyone sees every client, as in Airtable</span>
+            </div>
+            <div class="tbl-wrap">
+              <table class="data" style="min-width:620px">
+                <thead>
+                  <tr>
+                    <th>Person</th>
+                    <th style="width:9rem">Role</th>
+                    <th style="width:12rem">Can answer questions</th>
+                    <th class="r" style="width:8rem"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {active.map((p) => (
+                    <tr>
+                      <td>
+                        <span class="elem">{p.fullName}</span>
+                        <span class="sub">{p.email}</span>
+                      </td>
+                      <td>
+                        <span
+                          class={`chip ${p.role === 'admin' ? 'green' : 'excluded'}`}
+                        >
+                          <span class="d" /> {p.role}
+                        </span>
+                      </td>
+                      <td class="hint">
+                        Yes{p.role === 'admin' ? ' · and promote to a rule' : ''}
+                      </td>
+                      <td class="r">
+                        {p.id === me.id ? (
+                          <span class="hint">you</span>
+                        ) : (
+                          <button class="btn" type="button">Revoke</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Confidence thresholds</h3>
+              <span class="hint">versioned · changing these re-grades every result</span>
+            </div>
+            <div class="card-body">
+              <p class="note-serif" style="margin:0 0 .9rem;max-width:64ch">
+                Starting values. Tune them once there's real output to look at — the
+                point is that the estimating team owns where these lines sit, not the
+                person who wrote the code.
+              </p>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:0 1.6rem">
+                {
+                  [
+                    ['Green — minimum observations', DEFAULT_RULES.greenMinN],
+                    ['Green — maximum spread (CV)', DEFAULT_RULES.greenMaxCv],
+                    ['Green — distinct projects', DEFAULT_RULES.greenMinProjects],
+                    ['Green — distinct estimators', DEFAULT_RULES.greenMinEstimators],
+                    ['Green — newest observation (months)', DEFAULT_RULES.greenMaxAgeMonths],
+                    ['Amber — minimum observations', DEFAULT_RULES.amberMinN],
+                    ['Amber — maximum spread (CV)', DEFAULT_RULES.amberMaxCv],
+                    ['Amber — newest observation (months)', DEFAULT_RULES.amberMaxAgeMonths],
+                  ].map(([label, value]) => (
+                    <div style="display:grid;grid-template-columns:1fr 4.5rem;gap:.7rem;padding:.45rem 0;border-bottom:1px solid var(--line);align-items:center">
+                      <span style="font-size:.8rem;color:var(--muted)">{label}</span>
+                      <input
+                        class="num"
+                        type="text"
+                        value={String(value)}
+                        aria-label={String(label)}
+                        style="text-align:right;padding:.22rem .4rem;border:1px solid var(--line-2);border-radius:3px;background:var(--paper);color:var(--ink);font-size:.82rem;width:100%"
+                      />
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Reconciliation tolerance</h3>
+              <span class="hint">derived from the archive, not set by hand</span>
+            </div>
+            <div class="card-body">
+              <p class="note-serif" style="margin:0;max-width:64ch">
+                How far the sum of extracted line items may sit from a document's stated
+                total before the reader stops and asks. These get measured from how DCW's
+                own plans actually reconcile — calibrated first against the pilot
+                documents an estimator has verified, then re-derived from the full
+                archive. Provisional seeds are in place until the pilot runs.
+              </p>
+            </div>
+          </div>
+        </>
+      )
+    }
+  </div>
+</IntranetLayout>

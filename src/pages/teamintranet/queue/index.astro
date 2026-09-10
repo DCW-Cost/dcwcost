@@ -1,0 +1,115 @@
+---
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import { provider } from '../../../lib/intranet/data/index.ts';
+
+export const prerender = false;
+
+const questions = await provider.getOpenQuestions();
+const blocking = questions.filter((q) => q.mode === 'question');
+const assumptions = questions.filter((q) => q.mode === 'assumption');
+
+const KIND_LABEL: Record<string, string> = {
+  coding_system: 'Coding system',
+  gross_area: 'Gross area',
+  markup_basis: 'Markup basis',
+  deliverable_type: 'Deliverable type',
+  pricing_base_date: 'Pricing base date',
+  reconciliation: 'Reconciliation',
+  taxonomy_mapping: 'Taxonomy mapping',
+  other: 'Other',
+};
+---
+
+<IntranetLayout
+  title="Reader Queue"
+  crumb="Reader Queue"
+  section="queue"
+  meta={[`${blocking.length} blocking`, `${assumptions.length} awaiting confirmation`]}
+>
+  <div class="pane">
+    <p class="lede">
+      What the reader couldn't settle on its own. Anyone can answer — the person who
+      knows is often whoever ran the job. Every answer is recorded against your name
+      and travels with the numbers it affects.
+    </p>
+
+    <dl class="tiles">
+      <div class="tile warn">
+        <dt>Blocking</dt>
+        <dd>{blocking.length}<small>held out of the library</small></dd>
+      </div>
+      <div class="tile">
+        <dt>Assumptions</dt>
+        <dd>{assumptions.length}<small>usable, awaiting confirmation</small></dd>
+      </div>
+      <div class="tile">
+        <dt>Answered today</dt>
+        <dd>0<small>across the team</small></dd>
+      </div>
+    </dl>
+
+    {
+      [
+        { list: blocking, title: 'Blocking — the document waits on you', level: 'red' },
+        { list: assumptions, title: 'Assumptions — proposed, awaiting confirmation', level: 'amber' },
+      ].map((group) =>
+        group.list.length ? (
+          <div class="card">
+            <div class="card-head">
+              <h3>{group.title}</h3>
+              <span class="hint">{group.list.length}</span>
+            </div>
+            <div class="card-body" style="display:flex;flex-direction:column;gap:1rem">
+              {group.list.map((q) => (
+                <div class={`verdict-box ${group.level}`}>
+                  <span class="dot" aria-hidden="true" />
+                  <span style="flex:1;min-width:0">
+                    <b>{KIND_LABEL[q.kind] ?? q.kind}</b>
+                    <p style="margin:0 0 .45rem">{q.prompt}</p>
+                    {q.proposedAnswer && (
+                      <p style="margin:0 0 .45rem">
+                        <strong>Assuming: {q.proposedAnswer}</strong>
+                      </p>
+                    )}
+                    <p class="hint" style="margin:0 0 .6rem;overflow-wrap:anywhere">
+                      {q.evidence}
+                    </p>
+                    <p class="hint" style="margin:0 0 .6rem;overflow-wrap:anywhere">
+                      {q.projectName} · {q.documentName}
+                    </p>
+                    <span style="display:flex;gap:.4rem;flex-wrap:wrap">
+                      {q.mode === 'assumption' ? (
+                        <button class="btn primary" type="button">Confirm</button>
+                      ) : (
+                        q.options?.map((opt, i) => (
+                          <button class={i === 0 ? 'btn primary' : 'btn'} type="button">
+                            {opt}
+                          </button>
+                        ))
+                      )}
+                      <button class="btn" type="button">Something else…</button>
+                      <a class="btn ghost" href={q.boxFileUrl}>Open document</a>
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null,
+      )
+    }
+
+    <div class="card">
+      <div class="card-head"><h3>Why this queue matters</h3></div>
+      <div class="card-body">
+        <p class="note-serif" style="margin:0;max-width:64ch">
+          Answers here don't just fix one document. Each one can become a standing
+          rule scoped to an estimator, a template or a date range, so the reader stops
+          asking the same question across the rest of the archive. Question volume
+          should fall sharply as the backfill runs — if it doesn't, the scoping is
+          wrong and needs fixing before the full ingest.
+        </p>
+      </div>
+    </div>
+  </div>
+</IntranetLayout>

@@ -1,0 +1,79 @@
+---
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import { provider } from '../../../lib/intranet/data/index.ts';
+
+export const prerender = false;
+
+const estimates = await provider.listEstimates();
+---
+
+<IntranetLayout title="Estimate Builder" crumb="Estimate Builder" section="estimates">
+  <div class="pane">
+    <p class="lede">
+      Drop in the client's requirements and your own working files, and get back a
+      populated cost plan scoped to what the project actually asks for — editable,
+      in DCW's own template.
+    </p>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>In progress</h3>
+        <button class="btn primary" type="button">New estimate</button>
+      </div>
+      {
+        estimates.length ? (
+          <div class="tbl-wrap">
+            <table class="data" style="min-width:600px">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th style="width:9rem">Status</th>
+                  <th style="width:10rem">Owner</th>
+                  <th style="width:9rem">Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {estimates.map((e) => (
+                  <tr>
+                    <td>
+                      <a class="code" href={`/teamintranet/estimates/${e.id}/`}>
+                        {e.name}
+                      </a>
+                    </td>
+                    <td>{e.status}</td>
+                    <td>{e.createdByName}</td>
+                    <td class="num">
+                      {new Date(e.updatedAt).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div class="empty-state">No estimates yet.</div>
+        )
+      }
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>How it works</h3></div>
+      <div class="card-body">
+        <p class="note-serif" style="margin:0 0 .7rem;max-width:64ch">
+          The same reader that learned from DCW's archive, pointed forward. It reads
+          the RFP, the program document and the drawing set to work out what this
+          project needs, then proposes a rate for each element from comparable
+          history — escalated to your construction midpoint.
+        </p>
+        <p class="note-serif" style="margin:0;max-width:64ch">
+          Elements it can't price confidently arrive <strong>blank</strong>, with the
+          reason attached. A blank prompts an estimator; a confidently wrong number
+          reaches a client with your name on it.
+        </p>
+      </div>
+    </div>
+  </div>
+</IntranetLayout>

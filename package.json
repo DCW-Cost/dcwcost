@@ -9,10 +9,14 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'",
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/netlify": "^6.6.5",
     "@astrojs/sitemap": "^3.7.3",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.116.0",
     "astro": "^5.1.1"
   }
 }

@@ -1,0 +1,160 @@
+---
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import { provider } from '../../../lib/intranet/data/index.ts';
+import { buildResult, rate, pct, formatDate } from '../../../lib/intranet/library.ts';
+
+export const prerender = false;
+
+const code = Astro.params.code!;
+const taxonomy = await provider.getTaxonomy();
+const node = taxonomy.find((t) => t.code === code && t.level === 2);
+const observations = node ? await provider.getObservations({ taxonomyCode: code }) : [];
+
+if (!node || observations.length === 0) {
+  return new Response('Element not found', { status: 404 });
+}
+
+const result = buildResult(observations);
+const { summary, verdict, trend: t } = result;
+---
+
+<IntranetLayout
+  title={`${node.code} — ${node.title}`}
+  crumb="Cost Library / Element"
+  section="library"
+  meta={[
+    '$ / GSF · bare basis',
+    'escalated to today',
+    'cost estimates only',
+    `${result.kept.length} observations`,
+  ]}
+>
+  <div class="pane">
+    <dl class="tiles">
+      <div class="tile">
+        <dt>Median</dt>
+        <dd>{rate(summary.median)}<small>per GSF</small></dd>
+      </div>
+      <div class="tile">
+        <dt>p10 – p90</dt>
+        <dd>{rate(summary.p10)}–{summary.p90.toFixed(2)}<small>80% band</small></dd>
+      </div>
+      <div class="tile">
+        <dt>Observations</dt>
+        <dd>
+          {result.kept.length}
+          <small>across {result.distinctProjects} projects</small>
+        </dd>
+      </div>
+      <div class="tile">
+        <dt>Spread (CV)</dt>
+        <dd>
+          {Number.isFinite(summary.cv) ? summary.cv.toFixed(2) : '—'}
+          <small>{summary.cv <= 0.25 ? 'tight' : summary.cv <= 0.5 ? 'moderate' : 'wide'}</small>
+        </dd>
+      </div>
+      <div class="tile">
+        <dt>Trend</dt>
+        <dd>
+          {t.significant ? pct(t.percentPerYear) : '—'}
+          <small>
+            {t.significant
+              ? `per year, p = ${t.pValue.toFixed(2)}`
+              : `not enough signal (n=${t.n})`}
+          </small>
+        </dd>
+      </div>
+    </dl>
+
+    <div class="card">
+      <div class="card-body">
+        <div class={`verdict-box ${verdict.level}`}>
+          <span class="dot" aria-hidden="true"></span>
+          <span>
+            <b>{verdict.level} — {verdict.headline}</b>
+            <ul class="reasons">
+              {verdict.reasons.map((r) => <li>{r}</li>)}
+            </ul>
+            {
+              result.strippedMarkups.length > 0 && (
+                <p style="margin:.5rem 0 0;font-size:.84rem">
+                  Markups stripped to bare where present: {result.strippedMarkups.join(', ')}.
+                </p>
+              )
+            }
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Source observations</h3>
+        <span class="hint">{result.kept.length} pooled · {result.rejected.length} excluded</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th style="width:8rem">Sector</th>
+              <th class="r" style="width:7rem">Gross SF</th>
+              <th style="width:8rem">Issued</th>
+              <th style="width:9rem">Estimator</th>
+              <th class="r" style="width:7rem">As written</th>
+              <th class="r" style="width:7rem">Bare, esc.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              result.kept.map((o) => (
+                <tr>
+                  <td>
+                    <span class="elem">{o.projectName}</span>
+                    <span class="sub">
+                      {o.rawDescription}
+                      {o.hasOpenAssumption && ' · area assumed, unconfirmed'}
+                    </span>
+                  </td>
+                  <td>{o.sector}</td>
+                  <td class="num r">{o.grossSf.toLocaleString('en-US')}</td>
+                  <td class="num">{formatDate(o.issueDate)}</td>
+                  <td>{o.estimator}</td>
+                  <td class="num r">
+                    {rate(o.unitCost)}
+                    {o.markupFactor !== 1 && (
+                      <span class="sub">loaded ÷{o.markupFactor.toFixed(2)}</span>
+                    )}
+                  </td>
+                  <td class="num r"><b>{rate(o.escalatedBareCostPerSf)}</b></td>
+                </tr>
+              ))
+            }
+            {
+              result.rejected.map((r) => (
+                <tr style="opacity:.55">
+                  <td>
+                    <span class="elem" style="text-decoration:line-through">
+                      {r.item.projectName}
+                    </span>
+                    <span class="sub">excluded — {r.reason}</span>
+                  </td>
+                  <td>{r.item.sector}</td>
+                  <td class="num r">{r.item.grossSf.toLocaleString('en-US')}</td>
+                  <td class="num">{formatDate(r.item.issueDate)}</td>
+                  <td>{r.item.estimator}</td>
+                  <td class="num r">{rate(r.item.unitCost)}</td>
+                  <td class="num r" style="text-decoration:line-through">{rate(r.value)}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="bar-actions">
+      <a class="btn ghost" href="/teamintranet/">← All elements</a>
+    </div>
+  </div>
+</IntranetLayout>

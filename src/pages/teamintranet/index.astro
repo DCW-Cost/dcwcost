@@ -1,0 +1,121 @@
+---
+import IntranetLayout from '../../layouts/IntranetLayout.astro';
+import { provider } from '../../lib/intranet/data/index.ts';
+import { buildResult, rate } from '../../lib/intranet/library.ts';
+
+export const prerender = false;
+
+const taxonomy = await provider.getTaxonomy();
+const level2 = taxonomy.filter((t) => t.level === 2);
+
+// Each row shows what the library actually holds for that element, so the
+// browse screen is honest about coverage before anyone clicks in.
+const rows = await Promise.all(
+  level2.map(async (node) => {
+    const obs = await provider.getObservations({ taxonomyCode: node.code });
+    const result = obs.length ? buildResult(obs) : null;
+    const parent = taxonomy.find((t) => t.code === node.parentCode);
+    return { node, parent, result };
+  }),
+);
+
+const withData = rows.filter((r) => r.result && r.result.kept.length > 0);
+const greens = withData.filter((r) => r.result!.verdict.level === 'green').length;
+const reds = rows.length - withData.length +
+  withData.filter((r) => r.result!.verdict.level === 'red').length;
+---
+
+<IntranetLayout
+  title="Cost Library"
+  crumb="Cost Library"
+  section="library"
+  meta={['UniFormat II', '$ / GSF · bare basis', 'escalated to today']}
+>
+  <div class="pane">
+    <p class="lede">
+      Every cost line item DCW has issued, pooled on a bare basis and escalated to
+      today's dollars. Pick an element to see the range, what it's based on, and
+      whether the data is good enough to price from.
+    </p>
+
+    <dl class="tiles">
+      <div class="tile">
+        <dt>Elements</dt>
+        <dd>{level2.length}<small>UniFormat level 2</small></dd>
+      </div>
+      <div class="tile">
+        <dt>With data</dt>
+        <dd>{withData.length}<small>at least one observation</small></dd>
+      </div>
+      <div class="tile">
+        <dt>Ready to price</dt>
+        <dd>{greens}<small>green confidence</small></dd>
+      </div>
+      <div class="tile warn">
+        <dt>Needs work</dt>
+        <dd>{reds}<small>red or no data</small></dd>
+      </div>
+    </dl>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Elements</h3>
+        <span class="hint">median $/GSF, bare, escalated</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th style="width:4.5rem">Code</th>
+              <th>Element</th>
+              <th style="width:9rem">Confidence</th>
+              <th class="r" style="width:6rem">n</th>
+              <th class="r" style="width:8rem">Median</th>
+              <th class="r" style="width:11rem">p10 – p90</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              rows.map(({ node, parent, result }) => {
+                const has = result && result.kept.length > 0;
+                return (
+                  <tr>
+                    <td>
+                      {has ? (
+                        <a class="code" href={`/teamintranet/library/${node.code}/`}>
+                          {node.code}
+                        </a>
+                      ) : (
+                        <span class="code" style="opacity:.55">{node.code}</span>
+                      )}
+                    </td>
+                    <td>
+                      <span class="elem">{node.title}</span>
+                      <span class="sub">{parent?.title}</span>
+                    </td>
+                    <td>
+                      {has ? (
+                        <span class={`chip ${result!.verdict.level}`}>
+                          <span class="d" /> {result!.verdict.level}
+                        </span>
+                      ) : (
+                        <span class="chip excluded"><span class="d" /> no data</span>
+                      )}
+                    </td>
+                    <td class="num r">{has ? result!.kept.length : '—'}</td>
+                    <td class="num r">{has ? rate(result!.summary.median) : '—'}</td>
+                    <td class="num r">
+                      {has
+                        ? `${rate(result!.summary.p10)} – ${rate(result!.summary.p90)}`
+                        : '—'}
+                    </td>
+                  </tr>
+                );
+              })
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</IntranetLayout>
