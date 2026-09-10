@@ -1,0 +1,432 @@
+---
+/**
+ * The wishlist — what the team wants built, and what is broken.
+ *
+ * Everyone sees everything. Anyone can file and vote; only admins triage. The
+ * whole board is one query against `v_wishlist`, and every write goes through
+ * row-level security as the signed-in person, so the UI hiding a control is a
+ * courtesy rather than the enforcement.
+ *
+ * Unlike the rest of the intranet this screen writes to a real database today.
+ * That is deliberate: the first useful thing this tool can do for the team is
+ * remember what they asked for.
+ */
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import {
+  listWishlist,
+  createItem,
+  toggleVote,
+  triageItem,
+  deleteItem,
+  summarise,
+  isOpen,
+  KIND_LABEL,
+  STATUS_LABEL,
+  STATUS_TONE,
+  PRIORITY_LABEL,
+  STATUSES,
+  LIMITS,
+  wishlistEnabled,
+  type WishlistKind,
+  type WishlistStatus,
+} from '../../../lib/intranet/wishlist.ts';
+import { formatDate } from '../../../lib/intranet/library.ts';
+
+export const prerender = false;
+
+const isAdmin = Astro.locals.profile?.role === 'admin';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  let flash: { kind: 'ok' | 'bad'; text: string } | null = null;
+
+  if (action === 'create') {
+    const res = await createItem(Astro.cookies, Astro.request, {
+      kind: (String(form.get('kind')) === 'bug' ? 'bug' : 'idea') as WishlistKind,
+      title: String(form.get('title') ?? ''),
+      body: String(form.get('body') ?? ''),
+    });
+    flash = res.ok
+      ? { kind: 'ok', text: 'Filed. It is on the board below.' }
+      : { kind: 'bad', text: res.error ?? 'Could not file that.' };
+  } else if (action === 'vote') {
+    const res = await toggleVote(Astro.cookies, Astro.request, String(form.get('id')));
+    if (!res.ok) flash = { kind: 'bad', text: res.error ?? 'Vote did not register.' };
+  } else if (action === 'triage' && isAdmin) {
+    const res = await triageItem(Astro.cookies, Astro.request, {
+      id: String(form.get('id')),
+      status: String(form.get('status')) as WishlistStatus,
+      priority: form.get('priority') ? Number(form.get('priority')) : null,
+      targetDate: String(form.get('target_date') ?? ''),
+      adminNote: String(form.get('admin_note') ?? ''),
+    });
+    flash = res.ok
+      ? { kind: 'ok', text: 'Updated.' }
+      : { kind: 'bad', text: res.error ?? 'Could not update.' };
+  } else if (action === 'delete') {
+    const res = await deleteItem(Astro.cookies, Astro.request, String(form.get('id')));
+    if (!res.ok) flash = { kind: 'bad', text: res.error ?? 'Could not remove that.' };
+  }
+
+  // Redirect after post, so a refresh does not re-file the same idea. The flash
+  // rides in the query string rather than needing a session store.
+  const q = flash ? `?${new URLSearchParams({ [flash.kind]: flash.text })}` : '';
+  return Astro.redirect(`/teamintranet/wishlist/${q}`, 303);
+}
+
+const okMsg = Astro.url.searchParams.get('ok');
+const badMsg = Astro.url.searchParams.get('bad');
+
+const { items, error } = await listWishlist(Astro.cookies, Astro.request);
+const stats = summarise(items);
+const open = items.filter(isOpen);
+const closed = items.filter((i) => !isOpen(i));
+---
+
+<IntranetLayout
+  title="Wishlist"
+  crumb="Wishlist"
+  section="wishlist"
+  meta={[
+    `${stats.open} open`,
+    `${stats.ideas} ideas · ${stats.bugs} bugs`,
+    `${stats.votes} votes cast`,
+  ]}
+>
+  <div class="pane">
+    <h2>What should this thing do?</h2>
+    <p class="lede">
+      Anything you want the tool to do, or anything it does wrong. The whole team sees the
+      whole list, and the votes are what we use to decide the order — so vote for other
+      people's, not just your own.
+    </p>
+
+    {
+      !wishlistEnabled && (
+        <div class="verdict-box amber-box">
+          <span class="dot" style="background:var(--hold)" />
+          <div>
+            <b>Not connected yet</b>
+            This board needs a database to remember anything. Without
+            <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> it stays empty.
+          </div>
+        </div>
+      )
+    }
+    {
+      error && (
+        <div class="verdict-box red-box">
+          <span class="dot" style="background:var(--stop)" />
+          <div>
+            <b>Could not load the board</b>
+            {error}
+          </div>
+        </div>
+      )
+    }
+    {
+      okMsg && (
+        <div class="verdict-box green-box">
+          <span class="dot" style="background:var(--go)" />
+          <div>
+            <b>Done</b>
+            {okMsg}
+          </div>
+        </div>
+      )
+    }
+    {
+      badMsg && (
+        <div class="verdict-box red-box">
+          <span class="dot" style="background:var(--stop)" />
+          <div>
+            <b>That did not work</b>
+            {badMsg}
+          </div>
+        </div>
+      )
+    }
+
+    <div class="card" style="margin-top:1.1rem">
+      <div class="card-head"><b>File something</b></div>
+      <div class="card-body">
+        <form method="POST" class="wform">
+          <input type="hidden" name="action" value="create" />
+          <div class="wrow">
+            <label class="wfield">
+              <span class="sub">Type</span>
+              <select name="kind">
+                <option value="idea">Idea — something it should do</option>
+                <option value="bug">Bug — something that is broken</option>
+              </select>
+            </label>
+            <label class="wfield grow">
+              <span class="sub">One line</span>
+              <input
+                type="text"
+                name="title"
+                required
+                minlength="3"
+                maxlength={LIMITS.title}
+                placeholder="Compare one line item across projects, the way Zebel does"
+              />
+            </label>
+          </div>
+          <label class="wfield">
+            <span class="sub">Detail — optional, but the more the better</span>
+            <textarea
+              name="body"
+              rows="3"
+              maxlength={LIMITS.body}
+              placeholder="What are you trying to do, and what happens today instead? Naming a real project or document helps a lot."
+            ></textarea>
+          </label>
+          <div>
+            <button class="btn primary" type="submit" disabled={!wishlistEnabled}>File it</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <h3 class="shead">Open · {open.length}</h3>
+    {
+      open.length === 0 && !error && (
+        <div class="card">
+          <div class="empty-state">
+            Nothing open. Either everything is perfect, or nobody has told us yet.
+          </div>
+        </div>
+      )
+    }
+
+    <ul class="wlist">
+      {
+        open.map((item) => (
+          <li class="card wrap">
+            <form method="POST" class="vcol">
+              <input type="hidden" name="action" value="vote" />
+              <input type="hidden" name="id" value={item.id} />
+              <button
+                class={`vote${item.viewerHasVoted ? ' on' : ''}`}
+                type="submit"
+                disabled={!wishlistEnabled}
+                title={item.viewerHasVoted ? 'Remove your vote' : 'Vote for this'}
+              >
+                <span class="chev">▲</span>
+                <span class="cnt">{item.voteCount}</span>
+              </button>
+            </form>
+
+            <div class="wbody">
+              <div class="wtags">
+                <span class={`chip${item.kind === 'bug' ? ' red' : ''}`}>
+                  {KIND_LABEL[item.kind]}
+                </span>
+                <span class={`chip ${STATUS_TONE[item.status]}`}>{STATUS_LABEL[item.status]}</span>
+                {item.priority && <span class="chip">{PRIORITY_LABEL[item.priority]}</span>}
+                {item.targetDate && <span class="chip">Target {formatDate(item.targetDate)}</span>}
+              </div>
+
+              <h4>{item.title}</h4>
+              {item.body && <p class="wtext">{item.body}</p>}
+              <p class="byline">
+                {item.createdByName} · {formatDate(item.createdAt)}
+              </p>
+
+              {item.adminNote && (
+                <p class="anote">
+                  <b>Note</b> {item.adminNote}
+                </p>
+              )}
+
+              {isAdmin && (
+                <details class="triage">
+                  <summary>Triage</summary>
+                  <form method="POST" class="tform">
+                    <input type="hidden" name="action" value="triage" />
+                    <input type="hidden" name="id" value={item.id} />
+                    <div class="wrow">
+                      <label class="wfield">
+                        <span class="sub">Status</span>
+                        <select name="status">
+                          {STATUSES.map((s) => (
+                            <option value={s} selected={s === item.status}>
+                              {STATUS_LABEL[s]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label class="wfield">
+                        <span class="sub">Priority</span>
+                        <select name="priority">
+                          <option value="">—</option>
+                          {[1, 2, 3, 4].map((n) => (
+                            <option value={n} selected={n === item.priority}>
+                              {PRIORITY_LABEL[n]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label class="wfield">
+                        <span class="sub">Target date</span>
+                        <input type="date" name="target_date" value={item.targetDate ?? ''} />
+                      </label>
+                    </div>
+                    <label class="wfield">
+                      <span class="sub">Note to the team</span>
+                      <input
+                        type="text"
+                        name="admin_note"
+                        maxlength={LIMITS.adminNote}
+                        value={item.adminNote ?? ''}
+                        placeholder="Why it sits where it sits"
+                      />
+                    </label>
+                    <div><button class="btn" type="submit">Save</button></div>
+                  </form>
+                </details>
+              )}
+            </div>
+          </li>
+        ))
+      }
+    </ul>
+
+    {
+      closed.length > 0 && (
+        <>
+          <h3 class="shead">Closed · {closed.length}</h3>
+          <ul class="wlist done">
+            {closed.map((item) => (
+              <li class="card wrap">
+                <div class="vcol">
+                  <span class="cnt static">{item.voteCount}</span>
+                </div>
+                <div class="wbody">
+                  <div class="wtags">
+                    <span class={`chip${item.kind === 'bug' ? ' red' : ''}`}>
+                      {KIND_LABEL[item.kind]}
+                    </span>
+                    <span class={`chip ${STATUS_TONE[item.status]}`}>
+                      {STATUS_LABEL[item.status]}
+                    </span>
+                  </div>
+                  <h4>{item.title}</h4>
+                  {item.adminNote && (
+                    <p class="anote">
+                      <b>Note</b> {item.adminNote}
+                    </p>
+                  )}
+                  <p class="byline">
+                    {item.createdByName} · {formatDate(item.createdAt)}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )
+    }
+  </div>
+</IntranetLayout>
+
+<style>
+  /* Every colour here is a token, so the board follows the app into dark mode. */
+  .green-box { background: var(--go-bg); border-color: var(--go-line); }
+  .amber-box { background: var(--hold-bg); border-color: var(--hold-line); }
+  .red-box { background: var(--stop-bg); border-color: var(--stop-line); }
+  .verdict-box + .verdict-box { margin-top: 0.6rem; }
+
+  .shead {
+    font-family: var(--brand);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 1.6rem 0 0.6rem;
+  }
+
+  .wform, .tform { display: grid; gap: 0.7rem; }
+  .wrow { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+  .wfield { display: grid; gap: 0.22rem; flex: 1 1 12rem; min-width: 0; }
+  .wfield.grow { flex: 3 1 22rem; }
+  .wfield input,
+  .wfield textarea,
+  .wfield select {
+    font-family: var(--ui);
+    font-size: 0.85rem;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--line-2);
+    border-radius: 3px;
+    background: var(--paper);
+    color: var(--ink);
+    width: 100%;
+  }
+  .wfield textarea { resize: vertical; }
+  .wfield input:focus-visible,
+  .wfield textarea:focus-visible,
+  .wfield select:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+  .wlist { list-style: none; margin: 0; padding: 0; }
+  .wlist.done .card { opacity: 0.72; }
+  .card.wrap { display: flex; gap: 0.9rem; padding: 0.85rem 1rem; margin-bottom: 0.55rem; }
+
+  .vcol { flex: none; }
+  .vote {
+    appearance: none;
+    display: grid;
+    justify-items: center;
+    gap: 0.05rem;
+    min-width: 3rem;
+    padding: 0.4rem 0.35rem;
+    border: 1px solid var(--line-2);
+    border-radius: 3px;
+    background: var(--paper);
+    color: var(--muted);
+    cursor: pointer;
+    font-family: var(--ui);
+  }
+  .vote:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+  .vote.on { border-color: var(--blue); background: var(--sunk); color: var(--blue); }
+  .vote:disabled { cursor: not-allowed; opacity: 0.5; }
+  .chev { font-size: 0.6rem; line-height: 1.1; }
+  .cnt { font-family: var(--mono); font-weight: 700; font-size: 0.9rem; }
+  .cnt.static { display: grid; min-width: 3rem; place-items: center; color: var(--muted); padding-top: 0.4rem; }
+
+  .wbody { flex: 1 1 auto; min-width: 0; }
+  .wtags { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+  .wbody h4 {
+    font-family: var(--brand);
+    font-size: 0.95rem;
+    color: var(--ink);
+    margin: 0.35rem 0 0.15rem;
+  }
+  .wtext {
+    margin: 0.2rem 0;
+    font-size: 0.86rem;
+    color: var(--body);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .byline { margin: 0.3rem 0 0; font-size: 0.73rem; color: var(--faint); }
+  .anote {
+    margin: 0.45rem 0 0;
+    font-size: 0.8rem;
+    color: var(--body);
+    padding: 0.35rem 0.6rem;
+    border-left: 2px solid var(--line-2);
+    background: var(--sunk);
+  }
+  .anote b { font-family: var(--brand); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+
+  .triage { margin-top: 0.55rem; }
+  .triage summary { cursor: pointer; font-size: 0.75rem; color: var(--muted); }
+  .tform { margin-top: 0.55rem; padding: 0.7rem; border: 1px solid var(--line); border-radius: 3px; background: var(--sunk); }
+
+  @media (max-width: 640px) {
+    .card.wrap { flex-direction: column; }
+    .vote { grid-auto-flow: column; width: fit-content; align-items: center; gap: 0.4rem; }
+  }
+</style>

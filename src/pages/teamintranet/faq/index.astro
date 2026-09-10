@@ -1,0 +1,202 @@
+---
+/**
+ * How it works — the questions the team will actually ask.
+ *
+ * Lives in the tool rather than in a document, because the moment someone
+ * wonders "is it making this up?" they are looking at a screen, not a wiki. The
+ * same content is in docs/team-intranet/FAQ.md for people who prefer a file.
+ *
+ * Written to be read by an estimator, not a developer. Where the honest answer
+ * is "it does not do that yet", it says so.
+ */
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+
+export const prerender = false;
+
+interface Q {
+  q: string;
+  a: string;
+  /** Rendered as a muted follow-on line. */
+  more?: string;
+}
+
+interface Section {
+  title: string;
+  blurb: string;
+  items: Q[];
+}
+
+const sections: Section[] = [
+  {
+    title: 'Trusting the numbers',
+    blurb: 'The questions worth asking first.',
+    items: [
+      {
+        q: 'Is it making the prices up?',
+        a: 'No. Every figure traces back to a line in a document one of us issued — which project, which estimator, what date, what markups were stripped out, and a link to the file. If it cannot trace a number, it does not show one.',
+        more: 'Right now the demo figures ARE invented, and every page says so. That stops the moment real plans are loaded.',
+      },
+      {
+        q: 'Does it do the arithmetic?',
+        a: 'Never. The reader is allowed to read numbers off a page and nothing else. Every total, unit conversion, escalation and statistic is computed afterwards in ordinary code that is tested.',
+        more: 'A reader that cannot do maths cannot get the maths wrong. That is the whole reason for the split.',
+      },
+      {
+        q: 'What if the historical data is rubbish for some element?',
+        a: 'Then it says so and gives you nothing. Green means price from it. Amber means useful with judgment. Red means go and research it manually — too few observations, too much disagreement, or all from one job or one estimator.',
+        more: 'The reason always comes with the colour. Never a bare red light.',
+      },
+      {
+        q: 'What stops one weird project skewing everything?',
+        a: 'Outlier rejection, on every element, every time. It compares each observation against the median rather than the average, because an average is dragged around by exactly the extreme value you are trying to catch.',
+        more: 'Rejected observations are shown, not hidden — you can see what was thrown out and disagree.',
+      },
+      {
+        q: 'Who decides where the green/amber/red lines sit?',
+        a: 'You do. The thresholds are settings in the admin screen, not opinions baked into the software. If the estimating team thinks eight observations is too strict, change it.',
+      },
+    ],
+  },
+  {
+    title: 'Confidentiality',
+    blurb: 'What leaves the building, and what does not.',
+    items: [
+      {
+        q: 'Are our client cost plans being fed to an AI company?',
+        a: 'Documents are read through Anthropic\'s business API, where inputs and outputs are not used to train models. That is a different arrangement from pasting something into a consumer chatbot.',
+        more: 'It is worth being precise about this rather than saying "it is fine" — the distinction is the answer.',
+      },
+      {
+        q: 'Where do the documents themselves live?',
+        a: 'Where they already live. The database stores extracted values and a link back to the source; it is not a second copy of the archive.',
+      },
+      {
+        q: 'Can someone outside DCW get in?',
+        a: 'Three gates, all of which must pass. Microsoft has to authenticate you against the DCW tenant, your address has to end in the DCW domain, and an admin has to have approved your account. A guest account in the tenant does not even get a profile created.',
+      },
+      {
+        q: 'Can everyone see every client?',
+        a: 'Yes — exactly as in Airtable today. There is no per-client tiering. If a client contract ever required ring-fencing, that is a flag on the project and one extra clause in three policies, but building it before it is needed would add friction for a problem DCW does not have.',
+      },
+    ],
+  },
+  {
+    title: 'Using it',
+    blurb: 'Day to day.',
+    items: [
+      {
+        q: 'How do I get our old cost plans in?',
+        a: 'Add Documents in the sidebar. Drop in a PDF or Excel, tell it the project if you know it, and the reader takes it from there.',
+        more: 'The bulk backfill from Airtable is a separate scripted job — nobody is uploading two years of files by hand.',
+      },
+      {
+        q: 'It asked me a question. Do I have to answer?',
+        a: 'Somebody does, and it does not have to be an admin — usually the person who ran the job knows. Blocking questions hold a document out of the library until answered. Assumptions go in but stay flagged, and anything resting on an unconfirmed assumption can never be green.',
+      },
+      {
+        q: 'Will it keep asking me the same thing?',
+        a: 'No. Answers become standing rules. Tell it once that a particular estimator\'s 2024 plans use MasterFormat and how to map them, and it applies that to every matching document without asking again.',
+      },
+      {
+        q: 'Who answered a question six months ago?',
+        a: 'Your name is recorded against every answer, permanently and visibly. Months later you can see who settled a number and go ask them why.',
+      },
+      {
+        q: 'Does finishing an estimate here feed back into the library?',
+        a: 'That is the intent — an estimate finalised in the tool becomes evidence like any issued deliverable, so coverage and confidence improve as the team works, and elements climb from red to amber to green over time.',
+        more: 'Not built yet. It is on the wishlist; vote for it if it matters to you.',
+      },
+    ],
+  },
+  {
+    title: 'What it does not do yet',
+    blurb: 'Being straight about the gaps is cheaper than being caught out by them.',
+    items: [
+      {
+        q: 'Is the Estimate Builder working?',
+        a: 'No. It is designed and specified, not built. The screens render against demo data so you can react to the shape of it, which is the point of showing it this early.',
+      },
+      {
+        q: 'Can I compare one line item across several projects?',
+        a: 'Not yet, and it is one of the most obviously missing things — you should be able to ask "what did we charge for asphalt" without remembering which jobs had asphalt.',
+        more: 'On the roadmap. Vote for it on the Wishlist.',
+      },
+      {
+        q: 'Can I price per unit, per stall, per bedroom rather than per square foot?',
+        a: 'Not yet. Everything is normalised to dollars per gross square foot today, which is right for comparing buildings and wrong for plenty of individual elements.',
+        more: 'On the roadmap, and rated highly — this came up repeatedly when the team looked at other tools.',
+      },
+      {
+        q: 'Do the buttons save?',
+        a: 'Approve, revoke, confirm and accept currently render but do not persist. The Wishlist does save — genuinely, to a real database — because a suggestion box that forgets what you typed is worse than none.',
+      },
+    ],
+  },
+];
+---
+
+<IntranetLayout
+  title="How it works"
+  crumb="How it works"
+  section="faq"
+  meta={[`${sections.reduce((n, s) => n + s.items.length, 0)} questions`]}
+>
+  <div class="pane">
+    <h2>How it works</h2>
+    <p class="lede">
+      Written for estimators, not developers. If your question is not here, file it on the
+      <a href="/teamintranet/wishlist/">Wishlist</a> — that is what it is for, and the answer
+      usually ends up back on this page.
+    </p>
+
+    {
+      sections.map((s) => (
+        <div class="card">
+          <div class="card-head">
+            <b>{s.title}</b>
+            <span class="sub">{s.blurb}</span>
+          </div>
+          <div class="card-body">
+            <dl class="faq">
+              {s.items.map((item) => (
+                <>
+                  <dt>{item.q}</dt>
+                  <dd>
+                    {item.a}
+                    {item.more && <span class="more">{item.more}</span>}
+                  </dd>
+                </>
+              ))}
+            </dl>
+          </div>
+        </div>
+      ))
+    }
+  </div>
+</IntranetLayout>
+
+<style>
+  .faq { margin: 0; display: grid; gap: 1rem; }
+  .faq dt {
+    font-family: var(--brand);
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--ink);
+    margin-bottom: 0.25rem;
+  }
+  .faq dd {
+    margin: 0;
+    font-size: 0.87rem;
+    line-height: 1.55;
+    color: var(--body);
+    max-width: 72ch;
+  }
+  .faq dd .more {
+    display: block;
+    margin-top: 0.3rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    padding-left: 0.6rem;
+    border-left: 2px solid var(--line-2);
+  }
+</style>

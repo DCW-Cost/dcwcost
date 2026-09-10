@@ -37,6 +37,9 @@ and [`schema.sql`](docs/team-intranet/schema.sql) for the database.
 | `/teamintranet/estimates/[id]/brief` | What the reader understood from the client's documents |
 | `/teamintranet/estimates/[id]` | The Estimate Builder |
 | `/teamintranet/queue/` | Reader Queue — the reader's open questions |
+| `/teamintranet/documents/` | Add Documents — upload a cost plan for the reader |
+| `/teamintranet/wishlist/` | Wishlist — ideas and bugs, filed and voted on by the team |
+| `/teamintranet/faq/` | How it works — the questions estimators actually ask |
 | `/teamintranet/admin/` | Account approval and thresholds |
 
 These routes are server-rendered (`prerender = false`) via `@astrojs/netlify`.
@@ -47,6 +50,12 @@ Every marketing page stays prerendered exactly as before.
 the address must match `INTRANET_EMAIL_DOMAIN`, and an admin must have approved
 the account. Profiles are created by a database trigger, never by the app, so
 nobody can insert themselves as an active admin.
+**Working on this?** Three docs, by audience:
+[`RUNBOOK.md`](docs/team-intranet/RUNBOOK.md) — what to do next, step by step ·
+[`ONBOARDING-RACHEL.md`](docs/team-intranet/ONBOARDING-RACHEL.md) — getting set up
+to build · [`ZEBEL-GAP.md`](docs/team-intranet/ZEBEL-GAP.md) — capability roadmap
+drawn from the Zebel evaluation.
+
 **Taking this over?** Start with
 [`docs/team-intranet/HANDOFF.md`](docs/team-intranet/HANDOFF.md) — what exists, how to run
 it, what is real, what is next, and which accounts still need moving to DCW.
@@ -54,6 +63,12 @@ it, what is real, what is next, and which accounts still need moving to DCW.
 **To switch it on, follow [`docs/team-intranet/SETUP.md`](docs/team-intranet/SETUP.md)** —
 it needs a Supabase project and an Entra ID app registration, which only a
 person with a browser can create.
+
+**The Wishlist is the exception to the fixtures rule.** It reads and writes a real
+Supabase table, deliberately: a suggestion box that forgets what you typed is
+worse than none. It needs
+[`migrations/001_wishlist_and_uploads.sql`](docs/team-intranet/migrations/001_wishlist_and_uploads.sql)
+applied first, and says so on screen if it hasn't been.
 
 **What's real and what isn't.** The UI and the statistics are real — outlier
 rejection, the confidence gate and the trend test all genuinely run

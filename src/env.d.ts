@@ -20,6 +20,10 @@ interface ImportMetaEnv {
   readonly INTRANET_DATA?: string;
   readonly INTRANET_EMAIL_DOMAIN?: string;
   readonly INTRANET_BOOTSTRAP_ADMINS?: string;
+  /** Server-side only. Never exposed to a browser — the reader runs on the server. */
+  readonly ANTHROPIC_API_KEY?: string;
+  readonly AIRTABLE_API_KEY?: string;
+  readonly AIRTABLE_BASE_ID?: string;
 }
 
 interface ImportMeta {
