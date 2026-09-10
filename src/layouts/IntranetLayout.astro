@@ -15,6 +15,7 @@
 import '../styles/intranet.css';
 import Sidebar from '../components/intranet/Sidebar.astro';
 import { provider, usingFixtures } from '../lib/intranet/data/index.ts';
+import { authConfigured } from '../lib/intranet/auth.ts';
 
 export interface Props {
   title: string;
@@ -25,8 +26,10 @@ export interface Props {
 
 const { title, crumb, meta = [], section } = Astro.props;
 
-const enabled = import.meta.env.INTRANET_ENABLED === 'true';
-const user = await provider.getCurrentUser();
+// The middleware has already resolved who this is and turned away anyone who
+// shouldn't be here, so by the time a page renders there is always a profile.
+// The fixture user is the fallback only in demo mode.
+const user = Astro.locals.profile ?? (await provider.getCurrentUser());
 const openQuestions = (await provider.getOpenQuestions()).length;
 ---
 
@@ -48,9 +51,10 @@ const openQuestions = (await provider.getOpenQuestions()).length;
   </head>
   <body class="intranet">
     {
-      !enabled && (
+      !authConfigured && (
         <div class="fixture-strip">
-          Preview build · set INTRANET_ENABLED=true to serve these routes · not for production
+          No sign-in configured — anyone reaching this build is treated as an admin.
+          Set SUPABASE_URL and SUPABASE_ANON_KEY before this is reachable by anyone.
         </div>
       )
     }

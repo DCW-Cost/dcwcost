@@ -2,6 +2,8 @@
 import IntranetLayout from '../../../layouts/IntranetLayout.astro';
 import { provider } from '../../../lib/intranet/data/index.ts';
 
+export const prerender = false;
+
 const questions = await provider.getOpenQuestions();
 const blocking = questions.filter((q) => q.mode === 'question');
 const assumptions = questions.filter((q) => q.mode === 'assumption');

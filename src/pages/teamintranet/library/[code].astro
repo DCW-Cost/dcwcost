@@ -3,19 +3,17 @@ import IntranetLayout from '../../../layouts/IntranetLayout.astro';
 import { provider } from '../../../lib/intranet/data/index.ts';
 import { buildResult, rate, pct, formatDate } from '../../../lib/intranet/library.ts';
 
-export async function getStaticPaths() {
-  const taxonomy = await provider.getTaxonomy();
-  const level2 = taxonomy.filter((t) => t.level === 2);
-  const paths = [];
-  for (const node of level2) {
-    const observations = await provider.getObservations({ taxonomyCode: node.code });
-    if (!observations.length) continue;
-    paths.push({ params: { code: node.code }, props: { node, observations } });
-  }
-  return paths;
+export const prerender = false;
+
+const code = Astro.params.code!;
+const taxonomy = await provider.getTaxonomy();
+const node = taxonomy.find((t) => t.code === code && t.level === 2);
+const observations = node ? await provider.getObservations({ taxonomyCode: code }) : [];
+
+if (!node || observations.length === 0) {
+  return new Response('Element not found', { status: 404 });
 }
 
-const { node, observations } = Astro.props;
 const result = buildResult(observations);
 const { summary, verdict, trend: t } = result;
 ---

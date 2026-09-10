@@ -2,6 +2,8 @@
 import IntranetLayout from '../../../layouts/IntranetLayout.astro';
 import { provider } from '../../../lib/intranet/data/index.ts';
 
+export const prerender = false;
+
 const estimates = await provider.listEstimates();
 ---
 

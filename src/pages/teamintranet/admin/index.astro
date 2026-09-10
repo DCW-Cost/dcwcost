@@ -3,6 +3,8 @@ import IntranetLayout from '../../../layouts/IntranetLayout.astro';
 import { provider } from '../../../lib/intranet/data/index.ts';
 import { DEFAULT_RULES } from '../../../lib/intranet/stats.ts';
 
+export const prerender = false;
+
 const [pending, active, me] = await Promise.all([
   provider.getPendingProfiles(),
   provider.getActiveProfiles(),

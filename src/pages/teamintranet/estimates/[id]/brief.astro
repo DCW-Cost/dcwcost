@@ -3,10 +3,7 @@ import IntranetLayout from '../../../../layouts/IntranetLayout.astro';
 import { provider } from '../../../../lib/intranet/data/index.ts';
 import { money } from '../../../../lib/intranet/library.ts';
 
-export async function getStaticPaths() {
-  const list = await provider.listEstimates();
-  return list.map((e) => ({ params: { id: e.id } }));
-}
+export const prerender = false;
 
 const estimate = await provider.getEstimate(Astro.params.id!);
 if (!estimate) return Astro.redirect('/teamintranet/estimates/');

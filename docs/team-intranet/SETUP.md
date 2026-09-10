@@ -1,0 +1,180 @@
+# Turning on sign-in
+
+Everything on the code side is built. Three values are missing, and they can
+only be created by a person in a browser: a **Supabase project**, an **Entra ID
+app registration**, and the secret that ties them together.
+
+About 30 minutes. Do it in this order.
+
+> **You may need help with step 2.** Registering an app in Entra ID requires
+> Application Administrator (or Global Administrator) rights on DCW's Microsoft
+> tenant. If the Azure portal won't let you create a registration, that's the
+> reason — whoever administers DCW's Microsoft 365 can do it, or grant you the
+> role.
+
+---
+
+## 1. Create the Supabase project
+
+1. [supabase.com/dashboard](https://supabase.com/dashboard) → **New project**.
+   Name it `dcw-cost-library`. Choose the **West US (Oregon)** region — closest
+   to the team, and it keeps the data in the US.
+2. Save the database password somewhere safe. You won't need it for the app,
+   but you will if you ever connect directly.
+3. Wait for it to finish provisioning, then go to
+   **Project Settings → API** and copy two values:
+   - **Project URL** → this is `SUPABASE_URL`
+   - **anon / public** key → this is `SUPABASE_ANON_KEY`
+
+The anon key is safe to expose — it's designed to sit in a browser, and
+row-level security is what actually protects the data.
+
+**Do not copy the `service_role` key into this project.** It bypasses every
+security policy. Nothing here needs it.
+
+---
+
+## 2. Register the app in Entra ID
+
+In the [Azure portal](https://portal.azure.com) → **Microsoft Entra ID** →
+**App registrations** → **New registration**:
+
+| Field | Value |
+| ----- | ----- |
+| Name | `DCW Cost Library` |
+| Supported account types | **Accounts in this organizational directory only** (single tenant) |
+| Redirect URI | Platform **Web**, URI `https://<YOUR-PROJECT-REF>.supabase.co/auth/v1/callback` |
+
+`<YOUR-PROJECT-REF>` is the subdomain from the Project URL in step 1.
+
+Single tenant matters: it means only DCW's own directory can authenticate here
+at all, before any of our own checks run.
+
+After registering, from the **Overview** page copy:
+
+- **Application (client) ID**
+- **Directory (tenant) ID**
+
+Then **Certificates & secrets** → **New client secret**. Set the longest expiry
+your policy allows and note the date — *sign-in breaks on the day it expires*,
+so put a calendar reminder a month before. Copy the secret **Value** (not the
+Secret ID) immediately; it's only shown once.
+
+Finally, **API permissions** should already list `User.Read` under Microsoft
+Graph. Add the delegated permissions `email`, `openid`, `profile` and
+`offline_access` if they aren't there, then click **Grant admin consent for
+DCW** so nobody is prompted individually.
+
+---
+
+## 3. Connect Supabase to Entra ID
+
+In the Supabase dashboard:
+
+1. **Authentication → Providers → Azure** → enable it, and fill in:
+   - **Client ID** — the Application (client) ID from step 2
+   - **Secret** — the client secret *Value* from step 2
+   - **Azure Tenant URL** — `https://login.microsoftonline.com/<DIRECTORY-TENANT-ID>`
+2. **Authentication → URL Configuration**:
+   - **Site URL**: `http://localhost:4321` while developing; the real domain later
+   - **Redirect URLs** — add both:
+     - `http://localhost:4321/teamintranet/auth/callback`
+     - `https://dcwcost.com/teamintranet/auth/callback`
+3. **SQL Editor** → paste the whole of
+   [`schema.sql`](./schema.sql) and run it. That creates the tables, the
+   row-level security policies, and the trigger that creates a profile when
+   someone signs in for the first time.
+4. Still in the SQL Editor, seed yourself as the first admin **before signing
+   in**:
+
+   ```sql
+   insert into bootstrap_admins (email, note)
+   values ('lacie@dcwcost.com', 'first admin');
+   ```
+
+   This is the answer to the chicken-and-egg problem: the first admin can't be
+   approved by an existing admin. Anyone in this table comes out **active** and
+   **admin** on first sign-in; everyone else lands **pending** and waits.
+
+   Add Rachel, Brian and Trish the same way if you want them admin from the
+   start — otherwise approve them from the Admin screen once you're in.
+
+---
+
+## 4. Point the app at it
+
+Copy the template and fill in the two values from step 1:
+
+```bash
+cp .env.example .env
+```
+
+```bash
+INTRANET_ENABLED=true
+SUPABASE_URL=https://YOUR-PROJECT-REF.supabase.co
+SUPABASE_ANON_KEY=eyJ...
+INTRANET_EMAIL_DOMAIN=dcwcost.com
+INTRANET_DATA=fixtures
+```
+
+`.env` is gitignored. Never commit it.
+
+Then:
+
+```bash
+npm install
+npm run dev
+```
+
+Open <http://localhost:4321/teamintranet/> — you should be redirected to the
+sign-in page with a **Sign in with Microsoft** button.
+
+---
+
+## 5. What should happen
+
+| You do | You should get |
+| ------ | -------------- |
+| Visit `/teamintranet/` signed out | Redirected to `/teamintranet/signin` |
+| Sign in as `lacie@dcwcost.com` | Straight into the Cost Library, as an admin |
+| Sign in as another `@dcwcost.com` address | The "waiting for approval" page |
+| Approve that person from **Admin** | They get in on their next page load |
+| Sign in with a personal Microsoft account | Refused — no profile row is ever created |
+| Unset `INTRANET_ENABLED` | Every `/teamintranet` route returns 404 |
+
+If a real DCW address gets stuck on "waiting for approval" and you expected it
+to be admin, the address almost certainly isn't in `bootstrap_admins` — check
+spelling and that you seeded it *before* the first sign-in. If it was after,
+just approve them from the Admin screen, or run:
+
+```sql
+update profiles set status = 'active', role = 'admin', approved_at = now()
+where email = 'someone@dcwcost.com';
+```
+
+---
+
+## 6. Before this goes anywhere public
+
+The current build is **not** ready to be reachable, even with sign-in working:
+
+- **The data is still fixtures.** Every figure on screen is invented. Real data
+  needs `src/lib/intranet/data/supabase.ts` implementing the `DataProvider`
+  interface, then `INTRANET_DATA=supabase`.
+- **The write actions are inert.** Approve, Revoke, Confirm and Accept render
+  but don't persist yet.
+- **Netlify needs the same environment variables** set in
+  **Site configuration → Environment variables**, or the deployed build falls
+  back to demo mode — where *everyone is treated as an admin*. Set
+  `INTRANET_ENABLED` there last, once the rest is in place.
+
+---
+
+## Deploying later
+
+The site builds to a static marketing site plus one serverless function for
+`/teamintranet/*`. Netlify picks this up automatically from
+`@astrojs/netlify`; no extra configuration beyond the environment variables.
+
+Rotate the Entra ID client secret before it expires, in Azure and then in
+Supabase. That is the one piece of scheduled maintenance this setup needs.

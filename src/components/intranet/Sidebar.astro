@@ -42,6 +42,12 @@ const roleLabel = user.role === 'admin' ? 'Admin' : user.role === 'estimator' ? 
 
   <div class="whoami">
     <b>{user.fullName}</b>
-    {roleLabel} · signed in with Microsoft
+    <span style="overflow-wrap:anywhere">{user.email}</span><br />
+    {roleLabel}
+    <a
+      href="/teamintranet/auth/signout"
+      style="display:inline-block;margin-top:.5rem;font-size:.76rem;color:var(--muted)"
+      >Sign out</a
+    >
   </div>
 </aside>

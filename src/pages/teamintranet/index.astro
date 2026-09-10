@@ -3,6 +3,8 @@ import IntranetLayout from '../../layouts/IntranetLayout.astro';
 import { provider } from '../../lib/intranet/data/index.ts';
 import { buildResult, rate } from '../../lib/intranet/library.ts';
 
+export const prerender = false;
+
 const taxonomy = await provider.getTaxonomy();
 const level2 = taxonomy.filter((t) => t.level === 2);
 

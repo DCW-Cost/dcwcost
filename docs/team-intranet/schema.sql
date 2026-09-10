@@ -66,6 +66,68 @@ create or replace function is_admin() returns boolean
   );
 $$;
 
+-- ---------------------------------------------------------------------------
+-- Profile creation.
+--
+-- Profiles are created by a trigger, never by the client. If the app inserted
+-- its own row it would need an INSERT policy, and any policy permissive enough
+-- to allow that also lets someone insert themselves as an active admin. The
+-- trigger runs as the definer, so the app needs no write access at all and the
+-- status/role columns cannot be chosen by the person signing up.
+--
+-- Bootstrap: the first admin cannot be approved by an existing admin, so seed
+-- `bootstrap_admins` before anyone signs in. Those addresses come out active
+-- and admin; everyone else lands pending.
+-- ---------------------------------------------------------------------------
+
+create table bootstrap_admins (
+  email       text primary key,
+  note        text,
+  created_at  timestamptz not null default now()
+);
+
+create or replace function handle_new_auth_user() returns trigger
+  language plpgsql security definer set search_path = public, auth as $$
+declare
+  addr   text := lower(coalesce(new.email, ''));
+  domain text := lower(coalesce(
+                   current_setting('app.intranet_email_domain', true),
+                   'dcwcost.com'));
+  boot   boolean;
+begin
+  -- Domain gate, enforced in the database as well as the app. An outside guest
+  -- account in the tenant gets no profile row at all, so it can never be
+  -- approved by mistake.
+  if addr = '' or addr not like ('%@' || domain) then
+    return new;
+  end if;
+
+  select exists (select 1 from bootstrap_admins b where lower(b.email) = addr)
+    into boot;
+
+  insert into profiles (id, email, full_name, role, status, approved_at)
+  values (
+    new.id,
+    addr,
+    coalesce(
+      new.raw_user_meta_data ->> 'full_name',
+      new.raw_user_meta_data ->> 'name',
+      split_part(addr, '@', 1)
+    ),
+    case when boot then 'admin'::user_role else 'viewer'::user_role end,
+    case when boot then 'active'::user_status else 'pending'::user_status end,
+    case when boot then now() else null end
+  )
+  on conflict (id) do nothing;
+
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function handle_new_auth_user();
+
 -- ============================================================================
 -- 2. Reference data
 -- ============================================================================
@@ -653,6 +715,7 @@ create index on estimate_lines (disposition) where disposition = 'proposed';
 -- ============================================================================
 
 alter table profiles           enable row level security;
+alter table bootstrap_admins   enable row level security;
 alter table projects           enable row level security;
 alter table deliverables       enable row level security;
 alter table document_frames    enable row level security;
@@ -678,6 +741,15 @@ create policy profiles_admin_read on profiles
   for select using (is_admin());
 create policy profiles_admin_write on profiles
   for update using (is_admin());
+
+-- No INSERT policy on profiles, on purpose. Rows arrive only through the
+-- on_auth_user_created trigger above, so nobody can insert themselves as an
+-- active admin.
+
+-- Bootstrap list: admins only, and only through the dashboard or SQL editor
+-- before the first sign-in. Deliberately not readable by the app.
+create policy bootstrap_admin_only on bootstrap_admins
+  for all using (is_admin());
 
 -- Reference data: any active user reads; only admins write.
 create policy taxonomy_read on taxonomy
