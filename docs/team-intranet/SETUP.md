@@ -151,19 +151,19 @@ Netlify → your site → **Site configuration → Environment variables** →
 **Scope `INTRANET_ENABLED` to deploy previews only** — when adding it, choose
 *Different value for each deploy context* and set it only for **Deploy
 Previews**, leaving Production blank. That way the intranet is reachable on the
-preview URL for testing but stays switched off on dcwcost.com even if the
-branch is merged by accident. The other three are safe in all contexts.
+preview URL for testing but stays switched off on the live dcwc.netlify.app
+even if the branch is merged by accident. The other three are safe in all contexts.
 
 **Get the preview URL.** Open the pull request on GitHub. Netlify comments on
 it with a **Deploy Preview** link, something like
-`https://deploy-preview-1--yoursite.netlify.app`. If the deploy ran before you
+`https://deploy-preview-1--dcwc.netlify.app`. If the deploy ran before you
 added the variables, hit *Retry deploy* in Netlify so it picks them up.
 
 **Tell Supabase about that URL.** Supabase → **Authentication → URL
 Configuration → Redirect URLs** → add:
 
 ```
-https://deploy-preview-1--yoursite.netlify.app/teamintranet/auth/callback
+https://deploy-preview-1--dcwc.netlify.app/teamintranet/auth/callback
 ```
 
 substituting your actual preview URL. Without this, Microsoft will authenticate
