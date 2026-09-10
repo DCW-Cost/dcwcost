@@ -47,6 +47,10 @@ Every marketing page stays prerendered exactly as before.
 the address must match `INTRANET_EMAIL_DOMAIN`, and an admin must have approved
 the account. Profiles are created by a database trigger, never by the app, so
 nobody can insert themselves as an active admin.
+**Taking this over?** Start with
+[`docs/team-intranet/HANDOFF.md`](docs/team-intranet/HANDOFF.md) — what exists, how to run
+it, what is real, what is next, and which accounts still need moving to DCW.
+
 **To switch it on, follow [`docs/team-intranet/SETUP.md`](docs/team-intranet/SETUP.md)** —
 it needs a Supabase project and an Entra ID app registration, which only a
 person with a browser can create.
