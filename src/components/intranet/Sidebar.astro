@@ -2,7 +2,7 @@
 import type { Profile } from '../../lib/intranet/data/types.ts';
 
 export interface Props {
-  section: 'library' | 'estimates' | 'queue' | 'admin';
+  section: 'library' | 'estimates' | 'queue' | 'documents' | 'wishlist' | 'faq' | 'admin';
   user: Profile;
   openQuestions: number;
 }
@@ -13,6 +13,9 @@ const links = [
   { key: 'library', href: '/teamintranet/', label: 'Cost Library' },
   { key: 'estimates', href: '/teamintranet/estimates/', label: 'Estimate Builder' },
   { key: 'queue', href: '/teamintranet/queue/', label: 'Reader Queue', badge: openQuestions },
+  { key: 'documents', href: '/teamintranet/documents/', label: 'Add Documents' },
+  { key: 'wishlist', href: '/teamintranet/wishlist/', label: 'Wishlist' },
+  { key: 'faq', href: '/teamintranet/faq/', label: 'How it works' },
   { key: 'admin', href: '/teamintranet/admin/', label: 'Admin', adminOnly: true },
 ] as const;
 

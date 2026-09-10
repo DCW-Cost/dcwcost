@@ -1,0 +1,316 @@
+---
+/**
+ * Add Documents — how a historical cost plan gets into the library.
+ *
+ * This is the screen that was missing: PLAN §6 specifies the reader in detail,
+ * but until now there was no way to hand it anything. Drag-and-drop covers the
+ * few documents someone wants read today; the Airtable backfill covers the
+ * other twelve hundred and is a scripted job, not a person clicking.
+ */
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import {
+  listDocuments,
+  listProjects,
+  uploadDocument,
+  humanSize,
+  STATUS_LABEL,
+  STATUS_TONE,
+  ACCEPT_ATTR,
+  readerConfigured,
+  uploadsEnabled,
+} from '../../../lib/intranet/documents.ts';
+import { formatDate } from '../../../lib/intranet/library.ts';
+
+export const prerender = false;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const res = await uploadDocument(Astro.cookies, Astro.request, {
+    file: form.get('file') as File,
+    projectId: (String(form.get('project_id') ?? '') || null) as string | null,
+    newProjectName: String(form.get('new_project') ?? ''),
+    estimator: String(form.get('estimator') ?? ''),
+    issueDate: String(form.get('issue_date') ?? ''),
+    notes: String(form.get('notes') ?? ''),
+  });
+  const q = new URLSearchParams(
+    res.ok
+      ? { ok: 'Stored. It is queued for the reader.' }
+      : { bad: res.error ?? 'Upload failed.' }
+  );
+  return Astro.redirect(`/teamintranet/documents/?${q}`, 303);
+}
+
+const okMsg = Astro.url.searchParams.get('ok');
+const badMsg = Astro.url.searchParams.get('bad');
+
+const [{ docs, error }, projects] = await Promise.all([
+  listDocuments(Astro.cookies, Astro.request),
+  listProjects(Astro.cookies, Astro.request),
+]);
+
+const waiting = docs.filter((d) => d.status === 'pending').length;
+---
+
+<IntranetLayout
+  title="Add Documents"
+  crumb="Add Documents"
+  section="documents"
+  meta={[`${docs.length} uploaded`, `${waiting} waiting to be read`]}
+>
+  <div class="pane">
+    <h2>Give the reader something to read</h2>
+    <p class="lede">
+      Drop in a cost plan and the reader works out how it is coded, what area it is priced
+      against and how it handles markups — then asks you about anything it could not settle
+      on its own. Nothing reaches the library until those questions are answered.
+    </p>
+
+    {
+      !readerConfigured && (
+        <div class="vbox amber-box">
+          <span class="dot" style="background:var(--hold)"></span>
+          <div>
+            <b>The reader is not switched on yet</b>
+            Files upload and are stored safely, but nothing will be extracted until an
+            <code>ANTHROPIC_API_KEY</code> is set. Everything you add now is queued and gets
+            read the moment it is.
+          </div>
+        </div>
+      )
+    }
+    {
+      error && (
+        <div class="vbox red-box">
+          <span class="dot" style="background:var(--stop)"></span>
+          <div><b>Not ready</b>{error}</div>
+        </div>
+      )
+    }
+    {
+      okMsg && (
+        <div class="vbox green-box">
+          <span class="dot" style="background:var(--go)"></span>
+          <div><b>Done</b>{okMsg}</div>
+        </div>
+      )
+    }
+    {
+      badMsg && (
+        <div class="vbox red-box">
+          <span class="dot" style="background:var(--stop)"></span>
+          <div><b>That did not work</b>{badMsg}</div>
+        </div>
+      )
+    }
+
+    <div class="card" style="margin-top:1.1rem">
+      <div class="card-head"><b>Upload a cost plan</b></div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data" class="uform">
+          <label class="ufield">
+            <span class="sub">The document — PDF, Excel or CSV, up to 50 MB</span>
+            <input type="file" name="file" accept={ACCEPT_ATTR} required />
+          </label>
+
+          <div class="urow">
+            <label class="ufield">
+              <span class="sub">Project</span>
+              <select name="project_id">
+                <option value="">— new project, named below —</option>
+                {projects.map((p) => <option value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+            <label class="ufield grow">
+              <span class="sub">…or the name of a new one</span>
+              <input type="text" name="new_project" placeholder="Civic aquatic — Kent" />
+            </label>
+          </div>
+
+          <div class="urow">
+            <label class="ufield">
+              <span class="sub">Who priced it</span>
+              <input type="text" name="estimator" placeholder="Brian Thompson" />
+            </label>
+            <label class="ufield">
+              <span class="sub">Issue date</span>
+              <input type="date" name="issue_date" />
+            </label>
+          </div>
+
+          <label class="ufield">
+            <span class="sub">Anything the reader should know</span>
+            <input
+              type="text"
+              name="notes"
+              placeholder="Coded in MasterFormat. The 22% block on the last page is GCs plus fee."
+            />
+          </label>
+
+          <p class="hint">
+            Leave anything blank that you are not sure of — the reader will try to find it in
+            the document and ask you if it cannot. A guess here becomes a fact downstream, so
+            blank is better than approximately right.
+          </p>
+
+          <div>
+            <button class="btn primary" type="submit" disabled={!uploadsEnabled}>
+              Upload and queue
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><b>What happens after you upload</b></div>
+      <div class="card-body">
+        <ol class="steps">
+          <li>
+            <b>It works out the frame first.</b> How the document is coded, what area the rates
+            are priced against, what date it is priced to, and whether the numbers carry markups
+            or sit underneath them. The same <span class="code">$13.20</span> means different
+            things depending on those four, so nothing is extracted until they are settled.
+          </li>
+          <li>
+            <b>Then it pulls the line items.</b> Every figure keeps the page and cell it came
+            from, so you can always click back to the source.
+          </li>
+          <li>
+            <b>Then it checks its own arithmetic.</b> The extracted lines are added up and
+            compared against the cover-sheet total. A misread usually fails to reconcile, which
+            is how it gets caught.
+          </li>
+          <li>
+            <b>Then it asks you.</b> Anything unresolved lands in the
+            <a href="/teamintranet/queue/">Reader Queue</a> — blocking questions hold the
+            document out of the library; assumptions go in but stay flagged until confirmed.
+            Anyone can answer, and your name is recorded against the answer.
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><b>The other 1,200</b></div>
+      <div class="card-body">
+        <p class="lede" style="margin-bottom:.6rem">
+          Nobody is dragging two years of deliverables into a browser one at a time. The
+          documents are attachments on Airtable records, so the backfill is a scripted pull:
+          walk the base, fetch each attachment, and queue it exactly as an upload here would.
+        </p>
+        <p class="hint">
+          That job needs an Airtable API key and base id (<code>AIRTABLE_API_KEY</code>,
+          <code>AIRTABLE_BASE_ID</code>) and is not written yet. Use this page to prove the
+          reader works on a handful of real, awkward documents first — the backfill is only
+          worth running once it does.
+        </p>
+      </div>
+    </div>
+
+    <h3 class="shead">Uploaded · {docs.length}</h3>
+    {
+      docs.length === 0 ? (
+        <div class="card">
+          <div class="empty-state">Nothing uploaded yet.</div>
+        </div>
+      ) : (
+        <div class="card">
+          <div class="tbl-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Project detail</th>
+                  <th>Size</th>
+                  <th>Uploaded</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {docs.map((d) => (
+                  <tr>
+                    <td>
+                      <span class="code">{d.originalFilename ?? 'Untitled'}</span>
+                      {d.notes && <span class="sub">{d.notes}</span>}
+                    </td>
+                    <td>
+                      {d.estimator ?? '—'}
+                      {d.issueDate && <span class="sub">{formatDate(d.issueDate)}</span>}
+                    </td>
+                    <td>{humanSize(d.byteSize)}</td>
+                    <td>{d.uploadedAt ? formatDate(d.uploadedAt) : '—'}</td>
+                    <td>
+                      <span class={`chip ${STATUS_TONE[d.status]}`}>
+                        {STATUS_LABEL[d.status]}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )
+    }
+  </div>
+</IntranetLayout>
+
+<style>
+  .vbox {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid;
+    border-radius: 3px;
+    margin-bottom: 0.6rem;
+  }
+  .vbox .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; margin-top: 0.36rem; }
+  .vbox b {
+    font-family: var(--brand);
+    font-weight: 700;
+    display: block;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.15rem;
+  }
+  .vbox div { font-size: 0.85rem; color: var(--body); }
+  .green-box { background: var(--go-bg); border-color: var(--go-line); }
+  .amber-box { background: var(--hold-bg); border-color: var(--hold-line); }
+  .red-box { background: var(--stop-bg); border-color: var(--stop-line); }
+
+  .shead {
+    font-family: var(--brand);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 1.6rem 0 0.6rem;
+  }
+
+  .uform { display: grid; gap: 0.7rem; }
+  .urow { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+  .ufield { display: grid; gap: 0.22rem; flex: 1 1 12rem; min-width: 0; }
+  .ufield.grow { flex: 2 1 18rem; }
+  .ufield input,
+  .ufield select {
+    font-family: var(--ui);
+    font-size: 0.85rem;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--line-2);
+    border-radius: 3px;
+    background: var(--paper);
+    color: var(--ink);
+    width: 100%;
+  }
+  .ufield input[type='file'] { padding: 0.5rem; }
+  .ufield input:focus-visible,
+  .ufield select:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+  .steps { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.6rem; }
+  .steps li { font-size: 0.86rem; color: var(--body); }
+  .steps b { font-family: var(--brand); color: var(--ink); }
+</style>
