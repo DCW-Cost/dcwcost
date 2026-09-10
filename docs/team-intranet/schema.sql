@@ -857,7 +857,11 @@ create policy estimate_lines_write on estimate_lines
 -- statistics code never has to reassemble it.
 -- ============================================================================
 
-create view v_observations as
+-- security_invoker: without this a view runs with its OWNER's privileges, which
+-- in Supabase is a superuser — so it would read straight past the row-level
+-- security on the tables underneath and hand every row to anyone who can
+-- SELECT from it, pending accounts included. Requires Postgres 15+.
+create view v_observations with (security_invoker = true) as
 select
   li.id                       as line_item_id,
   li.taxonomy_code,
@@ -926,7 +930,11 @@ where d.status = 'accepted'
 -- extracted values are never overwritten. See PLAN §4 and §6.6.
 -- ============================================================================
 
-create view v_question_answers as
+-- security_invoker: without this a view runs with its OWNER's privileges, which
+-- in Supabase is a superuser — so it would read straight past the row-level
+-- security on the tables underneath and hand every row to anyone who can
+-- SELECT from it, pending accounts included. Requires Postgres 15+.
+create view v_question_answers with (security_invoker = true) as
 select
   q.id                as question_id,
   q.deliverable_id,
