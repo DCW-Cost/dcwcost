@@ -1,17 +1,25 @@
 # DCW Team Intranet + Historical Cost Database
 
-**Build plan — v2, 10 September 2026**
+**Build plan — v3, 10 September 2026**
 Prepared from the Rachel/Lacie calls of 9 September and 12 March.
 
-> **Changed in v2.** Ingestion is now built around an **AI reader** that
+> **Changed in v3.** The Cost Plan Builder is expanded into a full **round
+> trip** (§8): an estimator uploads the client's requirements alongside their
+> own working documents, and the tool returns a populated, editable cost plan
+> scoped to that project's actual requirements. Every outstanding decision is
+> now settled (§12) — anyone may answer reader questions, with the answer and
+> the answerer shown wherever it had an effect; Box uses a service account; the
+> escalation index is derived internally; all versions of a reissued deliverable
+> are kept.
+>
+> **Changed in v2.** Ingestion is built around an **AI reader** that
 > comprehends each cost plan before extracting from it — modelled on the
 > MediaPact reader for media kits and rate cards. It asks when it can't
 > decipher a coding system, proposes an assumption and requests confirmation
 > when a plan has no gross area, and works out for itself which figures in a
 > document are the real source of truth when markups and contingencies are
 > handled inconsistently. Client confidentiality tiering is removed: every team
-> member sees every client, matching how Airtable works today. Sections 5, 6, 7,
-> 9, 11 and 12 changed; §6 is substantially new.
+> member sees every client, matching how Airtable works today.
 
 ---
 
@@ -99,7 +107,7 @@ cannot render the interface. That's the whole argument.
      │
      ▼
   /teamintranet  (Astro SSR on the existing dcwcost.com Netlify site)
-     Cost Library · Cost Plan Builder · Reader Queue · Admin
+     Cost Library · Estimate Builder · Reader Queue · Admin
 ```
 
 Airtable remains authoritative for anything a human types. Postgres is
@@ -180,10 +188,18 @@ out, whether or not anyone remembers to revoke the profile.
 
 | Role | Can do |
 |---|---|
-| `admin` | Everything, plus approve/revoke users, answer reader questions, edit learned conventions, view the audit log |
+| `admin` | Everything, plus approve/revoke users, edit learned conventions, view the audit log |
 | `estimator` | Query the library, build cost plans, answer reader questions |
-| `viewer` | Query the library read-only |
+| `viewer` | Query the library, answer reader questions |
 | `pending` | Holding page only |
+
+**Anyone active can answer a reader question**, and every answer is shown with
+the name of the person who gave it — on the question itself, on the document it
+resolved, on any convention learned from it, and in the drill-down of every
+result that depends on it. Nobody has to wonder where a number's assumptions
+came from or who to go ask about them. Only admins can turn an answer into a
+standing convention or edit one, because a convention propagates across the
+whole archive; the answer itself is open to the team.
 
 Every rule above is enforced in Postgres **row-level security**, not in the UI.
 RLS is deny-by-default on every table; a bug in an Astro page cannot leak a row
@@ -449,14 +465,66 @@ consequences replayed.
 
 Questions and pending confirmations surface in the intranet as a working
 screen: the reader's question on the left with its evidence, the source document
-on the right, answer and move on. Estimators and admins can both work it.
+on the right, answer and move on. **Anyone on the team can work it** — the
+person who knows the answer is often whoever ran that job, not whoever holds a
+particular role.
+
+Every answer is attributed and stays visible: *"62,400 GSF — confirmed by Brian
+Thompson, 11 Sep."* That attribution follows the answer everywhere it has
+consequences, down to the drill-down on a library result three months later. It
+is not buried in an audit log; it is part of the data. Two reasons that matters
+— someone reading a number can go ask the person who settled it, and an answer
+that turns out to be wrong can be traced and its effects replayed.
 
 This is not just data hygiene. It is how the estimating team comes to trust the
 tool — they will believe numbers they have personally adjudicated, and they will
 not believe numbers that appeared by magic. Budget real time for it, especially
 in Phase 1.
 
-### 6.7 What the backfill costs
+### 6.7 Reconciliation tolerance — derived, not decreed
+
+How close the extracted sum has to be to the document's stated total before the
+reader accepts it. Rounding means they never match exactly, so this is a
+threshold rather than an equality check:
+
+| Gap | What happens |
+|---|---|
+| **Below the note threshold** | Accepted silently — rounding |
+| **Between note and block** | Accepted, but the gap and the reader's explanation are recorded on the document and shown in drill-down |
+| **Above the block threshold** | Blocking question. A gap that size usually means a missed section or a double-counted subtotal |
+
+**The thresholds are measured from DCW's own archive rather than picked by
+hand** — Lacie's call, and the right one. Every document's reconciliation gap is
+recorded during ingestion, and the thresholds are then set from how DCW's plans
+actually behave: the note threshold where the bulk of documents sit, the block
+threshold where genuine outliers begin. If 95% of DCW's plans reconcile inside
+1.2% and the remaining 5% are scattered far outside it, then 1.2% *is* the
+tolerance, and the 5% are exactly the documents a human should look at.
+
+This uses the same MAD-based outlier logic as the cost statistics (§7), which
+keeps one consistent definition of "outlier" across the whole system rather than
+two competing ones.
+
+**One caveat worth building around.** The gap distribution is measured using the
+reader's own extraction, so calibrating against the raw archive would let a
+systematically sloppy reader widen the thresholds until they accept its own
+mistakes. The fix is to calibrate in stages:
+
+1. **Seed** — provisional values (0.5% / 3%) for the pilot, so ingestion can
+   start at all.
+2. **Calibrate on verified documents** — once the ~70 pilot reports have been
+   through the Reader Queue and an estimator has confirmed the extractions are
+   right, re-derive the thresholds from that known-good set. This is the
+   important step: it measures how DCW's *documents* vary, not how the reader
+   errs.
+3. **Re-derive from the full archive** after the backfill, and periodically
+   thereafter as new deliverables land.
+
+Each calibration records what it was derived from and how many documents it
+measured, so a threshold can always be explained. Admin-editable and versioned,
+like the confidence thresholds.
+
+### 6.8 What the backfill costs
 
 Lacie's concern on the call — *"if the volume of these estimates isn't going to
 trip any sort of blocks and charge us an exorbitant amount of money"* — deserves
@@ -567,20 +635,100 @@ said about each line item"* — delivered.
 basis. Set filters. Get the statistics card, the confidence light, the trend,
 and the source list.
 
-**Cost Plan Builder** — the payoff, and the "automate inputs for future cost
-plans" requirement. Enter the project shell (GSF, sector, region, phase,
-delivery method). The tool generates a UniFormat line-item template with a
-suggested rate per element, each carrying its own confidence light and its own
-drill-down. The estimator accepts, overrides, or leaves red items blank to price
-by hand — and every override is captured with a reason, which becomes signal for
-the next version. Export to DCW's Excel deliverable format.
-
 **Reader Queue** — the reader's open questions and pending confirmations,
 worked against the source document side by side (§6.6).
 
 **Admin** — user approval and revocation, role assignment, reader conventions,
-ingest run history, confidence thresholds, escalation index management, audit
-log.
+ingest run history, confidence and reconciliation thresholds, escalation index
+management, audit log.
+
+**Estimate Builder** — the payoff, described in full below.
+
+### 8.1 The Estimate Builder: the round trip
+
+**Expanded in v3.** The target is the one Lacie described: *an estimator drops
+in their documents and the client's requirements, and gets back their document
+with the costing filled in, editable, and scoped to what this project actually
+asks for.*
+
+The insight that makes this cheap to build is that **it's the same reader,
+pointed forward.** §6 reads historical plans to learn what DCW has charged.
+This reads a new project's inputs to work out what it should be charged. Same
+three passes, same question-and-assumption behaviour, same attribution.
+
+**Step 1 — Drop in whatever exists.** The client's RFP, program document, or
+basis of design. A drawing set or area schedule. Spec sections. DCW's own
+estimate template. A prior estimate to update. Or nothing but a project already
+in Airtable, if that's all there is.
+
+**Step 2 — The reader builds a project brief.** Not just the shell figures, but
+the things that actually move a number:
+
+- **Gross area and program mix.** A 40,000 SF building that's 60% lab prices
+  nothing like one that's 100% open office. Mix drives element selection, not
+  just rates.
+- **Sector, location, delivery method, design phase.**
+- **Schedule → construction midpoint.** This is the escalation target. Pricing a
+  2028 construction start with 2026 dollars is a large, silent error.
+- **Scope requirements** — the part that makes this more than a template.
+  What the client explicitly includes, excludes, wants as an alternate, wants
+  carried as an allowance, or is furnishing themselves. Performance
+  requirements that carry cost, like a LEED or energy target.
+- **Stated budget**, where the client gave one.
+
+Anything ambiguous is raised exactly as in §6.4 — proposed with evidence, or
+asked outright.
+
+**Step 3 — Confirm the brief.** One screen, quickly scanned. This is the highest
+leverage moment in the whole flow, because every number downstream inherits it.
+
+**Step 4 — The estimate assembles itself.** For each UniFormat element, the tool
+queries the library filtered by the brief, escalates to the project's
+construction midpoint, and proposes a rate with its confidence light and
+drill-down. Then the estimator works it:
+
+- **Green** lines arrive filled and ready to accept.
+- **Amber** lines arrive filled but flagged for judgment.
+- **Red** lines arrive **blank**, with a note saying why. The tool does not fill
+  a cell with a number it can't stand behind — a blank prompts an estimator; a
+  bad number gets sent to a client.
+- **Requirements drive inclusions.** If the RFP excludes hazmat abatement, that
+  line is marked *excluded per client requirement* rather than quietly omitted,
+  so the difference between "we left it out on purpose" and "we forgot" is
+  visible on the face of the document.
+
+Every override is captured with its reason, which is signal for the next
+version.
+
+**Step 5 — Export the round trip.** Back out as DCW's Excel deliverable, with
+formulas intact and everything editable — not a PDF, not a new format the team
+has to learn. Cells the tool suggested are marked as suggested until an
+estimator accepts them, and a provenance sheet lists where each rate came from,
+what it was based on, and who confirmed the assumptions behind it.
+
+### 8.2 What this deliberately is not
+
+It is not an estimate you can send to a client without an estimator's judgment
+applied. Their name and DCW's liability go on the deliverable, and no tool
+should be able to put a number there that nobody chose.
+
+So the design goal is a **strong first draft in minutes instead of hours**, with
+every figure traceable and every weak figure conspicuous — and the review made
+fast rather than bypassed. Red lines left blank, suggested cells marked as
+suggested, and provenance on everything are all in service of that. A tool that
+quietly produced a complete-looking estimate would be worse than useless here;
+it would be a liability.
+
+### 8.3 Build sequencing
+
+This is a larger scope than v1 implied, so it comes in two parts:
+
+- **Phase 3a** — brief from a DCW project already in Airtable plus manual entry;
+  library-driven line proposals; confidence gates; Excel export with provenance.
+  This is the core loop and delivers most of the value.
+- **Phase 3b** — reading the client's own documents for requirements, program
+  mix, and exclusions. Higher value, more variable inputs, and it wants the
+  reader to be well-proven on the historical archive first.
 
 ---
 
@@ -642,8 +790,12 @@ and taught. Taxonomy and markup handling confirmed against actual documents.
 All 1,235 deliverables. Escalation index built and validated. Outlier rejection,
 trend detection, and the confidence gate tuned against real output with Rachel.
 
-### Phase 3 — the builder (weeks 9–12)
-Cost Plan Builder, override capture, Excel export in DCW's deliverable format.
+### Phase 3 — the Estimate Builder (weeks 9–14)
+**3a (weeks 9–12):** brief from Airtable plus manual entry, library-driven line
+proposals, confidence gating, override capture, Excel export with a provenance
+sheet. **3b (weeks 12–14):** reading the client's own requirement documents for
+program mix, inclusions and exclusions (§8.1). Longer than v1's estimate because
+the round trip is a bigger scope than a pre-filled template.
 
 ### Phase 4 — separate decision, later
 Whether the intranet absorbs what Softr does today. Revisit with real usage data
@@ -665,44 +817,50 @@ in hand. Not now.
 
 ---
 
-## 12. Questions
+## 12. Decisions
 
-### Answered — 10 September
+Everything that was blocking this build is settled. Recorded here because the
+reasoning matters later, when someone asks why the system behaves a certain way.
+
+### Settled by the reader's design — 10 September
 
 - **Does every cost plan carry gross area?** Doesn't need to. The reader looks
   for it, cross-checks Airtable, proposes an assumption with its evidence, and
   asks for confirmation. Documents without a stated area are ingestible.
-- **How are markups and contingencies handled?** Inconsistently, and that's now
-  the reader's job rather than a precondition. It determines the structure per
+- **How are markups and contingencies handled?** Inconsistently, and that's the
+  reader's job rather than a precondition. It determines the structure per
   document, derives a markup factor, and stores both the as-written and bare
   rates so the library can pool on one basis (§5.4).
 - **Is UniFormat coding consistent?** No longer blocking. The reader identifies
   the coding system per document, maps what it finds, and asks when it can't
-  (§6.4). Still useful to know roughly how mixed the archive is, for sizing
-  Phase 1 — but it no longer gates the build.
+  (§6.4).
+
+### Settled by DCW — 10 September
+
 - **Who can see which clients?** Everyone sees everything, matching Airtable
   today. No confidentiality tiering is being built (§9).
-
-### Still open
-
-1. **Who answers reader questions?** A designated estimator, Rachel, or whoever
-   owns the project? This is an operational decision that shapes the queue's
-   routing and notifications, and it matters more than it sounds — the queue
-   only works if someone owns it.
-2. **What reconciliation tolerance counts as clean?** A ±1% gap between summed
-   line items and the stated total is probably rounding; ±8% is a missed
-   section. Rachel's judgment on where the line sits will save a lot of noise.
-3. **Box access:** service account, or per-user OAuth? Service account is
-   simpler for the pipeline; per-user is stricter.
-4. **Airtable plan tier** — record caps and API limits, so we size the sync
-   correctly.
-5. **Escalation index:** derive DCW's own from the archive, or subscribe to a
-   published PNW index? Recommend deriving internally and cross-checking
-   against ENR Seattle CCI.
-6. **Version history:** when a deliverable was reissued, is the latest version
-   the only one that counts, or is each issuance a legitimate observation?
-   Recommend keeping all versions, flagged, and defaulting queries to the
-   latest.
+- **Who answers reader questions?** Anyone active. Answers are attributed and
+  the attribution stays visible everywhere the answer had an effect, down to the
+  drill-down on a library result months later (§4, §6.6). Only admins promote an
+  answer to a standing convention.
+- **What reconciliation gap counts as clean?** Not a fixed number — derived from
+  how DCW's own plans actually reconcile, with outliers excluded by the same MAD
+  logic used everywhere else. Seeded provisionally, calibrated against the
+  human-verified pilot set, then re-derived from the full archive (§6.7).
+- **Box access.** Service account for now — simpler for the pipeline. Revisit if
+  per-document access control ever becomes a requirement; it's a swap of the
+  auth layer, not a redesign.
+- **Airtable limits.** Size the sync to whatever tier DCW is on: incremental
+  sync keyed on `last_modified`, batched reads, and back-off well inside the API
+  rate limit. Confirm the tier before the Phase 2 backfill, since that's the
+  only point where volume gets near any cap.
+- **Escalation index.** Derive DCW's own from the archive — it measures DCW's
+  actual market rather than a national average — and cross-check against ENR's
+  Seattle CCI (§5.5).
+- **Version history.** Keep every issuance of a reissued deliverable, flagged,
+  with queries defaulting to the latest. A superseded estimate is still evidence
+  of what DCW thought that scope cost on that date, and discarding it would
+  throw away exactly the signal trend detection needs.
 
 ---
 
@@ -711,8 +869,9 @@ in hand. Not now.
 | Who | What |
 |---|---|
 | Rachel | Airtable account for Lacie + share the DCW and Cost Database bases (exclude the HR base with health insurance and 401k data) |
-| Rachel | Answers to §12 "still open", especially Q1 and Q2 |
+| Rachel | Confirm the Airtable plan tier before the Phase 2 backfill |
 | Rachel | If possible, flag 2–3 documents you already know are awkward — a missing area, an odd markup block, unusual coding. They're the most valuable pilot inputs, because they exercise the reader rather than flatter it. |
+| Rachel + team | Feedback on the Estimate Builder walkthrough (§8), before it gets built rather than after |
 | Lacie | Stand up Supabase, wire Entra ID sign-in, build the `/teamintranet` shell and admin panel |
 | Lacie | Build the reader's three passes; run 10–20 pilot documents; get one category rendering end to end for Friday |
 | Both | Walk the Phase 0 demo before Friday, and agree what is explicitly *not* claimed to be finished |

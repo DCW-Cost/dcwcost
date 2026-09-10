@@ -448,6 +448,27 @@ create table confidence_rules (
   trend_min_n           smallint not null default 8,
   trend_max_p_value     numeric(4,3) not null default 0.10,
 
+  -- How far the sum of extracted line items may sit from the document's stated
+  -- total before the reader stops and asks. Rounding means they never match
+  -- exactly, so this is a threshold, not an equality check.
+  --   below 'note'    -> accepted silently
+  --   'note'..'block' -> accepted, gap recorded and shown in drill-down
+  --   above 'block'   -> blocking question; usually a missed section or a
+  --                      double-counted subtotal
+  --
+  -- These are NOT picked by hand. They are DERIVED from how DCW's own documents
+  -- actually behave: measure the reconciliation gap across the archive, and set
+  -- 'note' where the bulk of documents sit and 'block' where the genuine
+  -- outliers begin — the same MAD-based outlier logic used on cost data. The
+  -- values below are provisional seeds for the pilot only; calibration replaces
+  -- them and is re-run as the archive grows. See PLAN §6.7 and the columns
+  -- below, which record where a calibrated pair came from.
+  reconcile_note_pct    numeric(5,3) not null default 0.5,
+  reconcile_block_pct   numeric(5,3) not null default 3.0,
+  reconcile_calibrated_from  text,      -- 'seed' | 'pilot_verified' | 'archive'
+  reconcile_sample_n         integer,   -- documents the calibration measured
+  reconcile_calibrated_at    timestamptz,
+
   created_by            uuid references profiles(id),
   created_at            timestamptz not null default now(),
   unique (version)
@@ -475,20 +496,6 @@ create table ingest_runs (
   notes           text
 );
 
--- When an estimator overrides a suggested rate in the Cost Plan Builder, the
--- reason is captured. This is the feedback loop that improves the next version.
-create table rate_overrides (
-  id              uuid primary key default gen_random_uuid(),
-  user_id         uuid not null references profiles(id),
-  taxonomy_code   text not null references taxonomy(code),
-  suggested_value numeric(16,6),
-  suggested_confidence text,         -- 'green' | 'amber' | 'red'
-  override_value  numeric(16,6),
-  reason          text,
-  context         jsonb,             -- the filters in play at the time
-  created_at      timestamptz not null default now()
-);
-
 create table audit_log (
   id              bigserial primary key,
   actor_id        uuid references profiles(id),
@@ -502,6 +509,134 @@ create table audit_log (
 
 create index on audit_log (actor_id, created_at desc);
 create index on audit_log (action, created_at desc);
+
+-- ============================================================================
+-- 6b. The Estimate Builder — the round trip
+--
+-- An estimator drops in their documents and the client's requirements, and gets
+-- back a populated, editable cost plan scoped to what that project actually
+-- asks for. Structurally this is the same reader as §3b/§4b, pointed forward:
+-- instead of reading a historical plan to learn what DCW charged, it reads a
+-- new project's inputs to work out what it should charge. See PLAN §8.1.
+-- ============================================================================
+
+create type estimate_status as enum
+  ('draft', 'reading_inputs', 'brief_review', 'building', 'in_review',
+   'exported', 'abandoned');
+
+create table estimates (
+  id              uuid primary key default gen_random_uuid(),
+  project_id      uuid references projects(id),   -- null for a pure pursuit
+  name            text not null,
+  created_by      uuid not null references profiles(id),
+  status          estimate_status not null default 'draft',
+  target_phase    design_phase not null default 'unknown',
+  exported_at     timestamptz,
+  export_file_url text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+create index on estimates (created_by, updated_at desc);
+create index on estimates (project_id);
+
+-- What the estimator dropped in: RFP, program document, drawing set, area
+-- schedule, spec sections, a prior estimate to update, DCW's own template.
+create table estimate_inputs (
+  id              uuid primary key default gen_random_uuid(),
+  estimate_id     uuid not null references estimates(id) on delete cascade,
+  filename        text not null,
+  storage_url     text not null,      -- Box, same as the archive
+  input_kind      text,               -- 'rfp' | 'program' | 'drawings' |
+                                      -- 'area_schedule' | 'spec' |
+                                      -- 'prior_estimate' | 'template' | 'other'
+  uploaded_by     uuid not null references profiles(id),
+  read_status     ingest_status not null default 'pending',
+  uploaded_at     timestamptz not null default now()
+);
+
+create index on estimate_inputs (estimate_id);
+
+-- The reader's understanding of the NEW project. The forward-facing twin of
+-- document_frames. Confirmed on one screen before any line is proposed, because
+-- everything downstream inherits it.
+create table estimate_briefs (
+  id                  uuid primary key default gen_random_uuid(),
+  estimate_id         uuid not null unique
+                        references estimates(id) on delete cascade,
+
+  gross_sf            numeric(14,2),
+  -- A 40,000 SF building that is 60% lab prices nothing like one that is 100%
+  -- open office. Mix drives which elements appear, not only their rates.
+  program_mix         jsonb,          -- [{use:'lab', sf:24000}, …]
+  sector              text,
+  region              text,
+  delivery_method     text,
+  phase               design_phase,
+
+  -- The escalation target. Pricing a 2028 start in 2026 dollars is a large,
+  -- silent error, so this is captured explicitly rather than inferred.
+  construction_start  date,
+  construction_midpoint date,
+
+  -- The part that makes this more than a filled-in template. Sourced from the
+  -- client's own requirement documents in Phase 3b.
+  inclusions          jsonb,          -- [{scope:'…', source:'RFP §3.2'}, …]
+  exclusions          jsonb,
+  alternates          jsonb,
+  allowances          jsonb,
+  owner_furnished     jsonb,
+  performance_reqs    jsonb,          -- LEED / energy targets that carry cost
+  stated_budget       numeric(16,2),
+
+  confidence          numeric(4,3),
+  confirmed_by        uuid references profiles(id),
+  confirmed_at        timestamptz,
+  created_at          timestamptz not null default now()
+);
+
+-- One row per element in the estimate being built. Carries what the tool
+-- proposed, what the estimator decided, and why — the override reason is the
+-- feedback signal for the next version.
+create type line_disposition as enum
+  ('proposed', 'accepted', 'overridden', 'excluded_by_requirement',
+   'left_blank', 'manually_added');
+
+create table estimate_lines (
+  id                  uuid primary key default gen_random_uuid(),
+  estimate_id         uuid not null references estimates(id) on delete cascade,
+  taxonomy_code       text not null references taxonomy(code),
+  sort_order          integer,
+
+  -- ---- What the library proposed ----
+  suggested_rate      numeric(16,6),  -- $/GSF, bare basis
+  suggested_confidence text,          -- 'green' | 'amber' | 'red'
+  suggested_reason    text,           -- the plain-words justification shown to
+                                      -- the estimator, e.g. "11 obs, 7 projects"
+  sample_n            smallint,
+  sample_query        jsonb,          -- the exact filters, so it reproduces
+  -- A red line arrives BLANK. The tool does not fill a cell with a number it
+  -- cannot stand behind: a blank prompts an estimator, a bad number reaches a
+  -- client. See PLAN §8.2.
+
+  -- ---- What the estimator decided ----
+  disposition         line_disposition not null default 'proposed',
+  final_rate          numeric(16,6),
+  override_reason     text,
+  -- Set when a requirement in the brief removed this scope, so "left out on
+  -- purpose" is visible on the face of the document and distinguishable from
+  -- "forgotten".
+  excluded_source     text,           -- e.g. 'RFP §5.4 — hazmat by owner'
+  decided_by          uuid references profiles(id),
+  decided_at          timestamptz,
+
+  extended_cost       numeric(16,2),
+  created_at          timestamptz not null default now()
+);
+
+create index on estimate_lines (estimate_id, sort_order);
+create index on estimate_lines (taxonomy_code);
+create index on estimate_lines (disposition) where disposition = 'proposed';
 
 -- ============================================================================
 -- 7. Row-level security — deny by default, everywhere
@@ -530,7 +665,10 @@ alter table units              enable row level security;
 alter table cost_indices       enable row level security;
 alter table confidence_rules   enable row level security;
 alter table ingest_runs        enable row level security;
-alter table rate_overrides     enable row level security;
+alter table estimates          enable row level security;
+alter table estimate_inputs    enable row level security;
+alter table estimate_briefs    enable row level security;
+alter table estimate_lines     enable row level security;
 alter table audit_log          enable row level security;
 
 -- Profiles: you can always read yourself. Admins read and write everyone.
@@ -568,16 +706,15 @@ create policy notes_read on estimator_notes
 -- The Reader Queue. Estimators and admins answer questions and confirm
 -- assumptions; that is the only write path into cost data from the UI.
 -- Everything else is written by the pipeline's service role.
+-- Anyone active may answer, because the person who knows the answer is often
+-- whoever ran that job rather than whoever holds a particular role. Answers are
+-- attributed via answered_by and that attribution is public to the team —
+-- see v_question_answers below.
 create policy reader_questions_read on reader_questions
   for select using (is_active_user());
 
 create policy reader_questions_answer on reader_questions
-  for update using (
-    is_active_user() and exists (
-      select 1 from profiles
-      where id = auth.uid() and role in ('admin', 'estimator')
-    )
-  );
+  for update using (is_active_user());
 
 create policy line_items_review_write on line_items
   for update using (
@@ -598,10 +735,47 @@ create policy conventions_admin_write on reader_conventions
 -- Operations tables.
 create policy ingest_runs_read on ingest_runs
   for select using (is_active_user());
-create policy overrides_own on rate_overrides
-  for all using (user_id = auth.uid() or is_admin());
 create policy audit_admin_only on audit_log
   for select using (is_admin());
+
+-- Estimates in progress. Readable by the whole team — estimators cover for each
+-- other, and a colleague's in-progress estimate is exactly the thing you want to
+-- pick up when someone is out. Editable by its author, or any admin.
+create policy estimates_read on estimates
+  for select using (is_active_user());
+create policy estimates_write on estimates
+  for all using (created_by = auth.uid() or is_admin());
+
+create policy estimate_inputs_read on estimate_inputs
+  for select using (is_active_user());
+create policy estimate_briefs_read on estimate_briefs
+  for select using (is_active_user());
+create policy estimate_lines_read on estimate_lines
+  for select using (is_active_user());
+
+create policy estimate_inputs_write on estimate_inputs
+  for all using (
+    is_admin() or exists (
+      select 1 from estimates e
+      where e.id = estimate_inputs.estimate_id and e.created_by = auth.uid()
+    )
+  );
+
+create policy estimate_briefs_write on estimate_briefs
+  for all using (
+    is_admin() or exists (
+      select 1 from estimates e
+      where e.id = estimate_briefs.estimate_id and e.created_by = auth.uid()
+    )
+  );
+
+create policy estimate_lines_write on estimate_lines
+  for all using (
+    is_admin() or exists (
+      select 1 from estimates e
+      where e.id = estimate_lines.estimate_id and e.created_by = auth.uid()
+    )
+  );
 
 -- ============================================================================
 -- 8. Convenience view: one comparable observation per row
@@ -665,4 +839,40 @@ where d.status = 'accepted'
                                -- with elemental rates
   and li.basis <> 'undetermined';  -- a rate whose markup basis the reader could
                                    -- not establish is not comparable to anything
+
+-- ============================================================================
+-- 9. Who settled what
+--
+-- Attribution is part of the data, not a line in an audit log. Any active user
+-- may answer a reader question, and the answer travels with its consequences:
+-- shown on the question, on the document it resolved, on any convention learned
+-- from it, and in the drill-down of every library result that depends on it.
+--
+-- Two reasons this matters. Someone reading a number months later can go ask
+-- the person who settled it. And an answer that turns out to be wrong can be
+-- traced to its source and its effects replayed — which works because raw
+-- extracted values are never overwritten. See PLAN §4 and §6.6.
+-- ============================================================================
+
+create view v_question_answers as
+select
+  q.id                as question_id,
+  q.deliverable_id,
+  q.kind,
+  q.mode,
+  q.state,
+  q.prompt,
+  q.evidence,
+  q.proposed_answer,
+  q.answer,
+  q.answered_at,
+  p.full_name         as answered_by_name,
+  p.email             as answered_by_email,
+  c.id                as convention_id,
+  c.rule              as convention_rule,
+  cp.full_name        as convention_created_by_name
+from reader_questions q
+  left join profiles p  on p.id = q.answered_by
+  left join reader_conventions c on c.id = q.became_convention
+  left join profiles cp on cp.id = c.created_by;
 
