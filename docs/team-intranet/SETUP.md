@@ -306,3 +306,59 @@ declare `dcwcost.com` as their canonical URL even while served from
 setting — it stops this deployment competing with the real site in search
 results. It has no effect on the intranet, which uses the live request's own
 hostname for sign-in.
+
+---
+
+## When sign-in misbehaves
+
+Both of these were hit for real during the first setup. Neither produces a
+useful error on its own, which is what makes them expensive.
+
+### You end up on the site root with `?code=...` in the address bar
+
+Microsoft authenticated you, Supabase issued a login code, and then sent it to
+the wrong place. **Supabase does not error on a rejected redirect** — it
+silently falls back to the project's **Site URL**, so you land somewhere real
+and apparently blank instead of seeing a failure.
+
+It means the callback URL the app asked for is not on **Authentication → URL
+Configuration → Redirect URLs**. Check it character for character. Supabase
+matches the *whole* URL including any query string, so
+`/teamintranet/auth/callback?next=%2F…` does **not** match an allowlisted
+`/teamintranet/auth/callback`.
+
+(The app deliberately keeps its callback URL constant for this reason — the
+post-sign-in destination travels in a cookie instead. If you ever find yourself
+adding a wildcard to make a redirect match, something has regressed.)
+
+### "Invalid API key"
+
+`SUPABASE_ANON_KEY` is wrong. Note that the whole Microsoft round trip
+**succeeds** before this appears: the sign-in button only builds a URL locally
+and never contacts Supabase, so the key is not checked until the callback tries
+to exchange the login code for a session.
+
+Supabase changed its key format in 2025. New projects issue **publishable**
+(`sb_publishable_…`) and **secret** keys, with the older `anon`/`service_role`
+JWTs under a separate **Legacy API keys** heading. Either the publishable key or
+the legacy `anon` key works. Never use a **secret** or **service_role** key —
+it bypasses every row-level security policy.
+
+Test a key in five seconds without redeploying, in a browser tab:
+
+```
+https://<YOUR-PROJECT-REF>.supabase.co/rest/v1/taxonomy?select=code&limit=1&apikey=<KEY>
+```
+
+| Response | Meaning |
+| -------- | ------- |
+| `[]` | The key is good. Empty is *correct* — RLS hides the table from anyone not signed in |
+| `{"message":"Invalid API key"}` | Wrong key |
+| Actual rows of data | You used a secret/service_role key. Don't |
+
+### Nothing changed after editing an environment variable
+
+Netlify bakes environment variables in at deploy time. Editing one does nothing
+until you rebuild: open the deploy → **Options → Retry deploy**. "Trigger deploy
+→ Deploy project" builds the *production* branch instead, and "Publish deploy"
+promotes a preview to production — neither is what you want here.
