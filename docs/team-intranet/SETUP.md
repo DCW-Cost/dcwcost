@@ -116,6 +116,57 @@ In the Supabase dashboard:
 
 ## 4. Point the app at it
 
+Two ways to do this. **Pick 4a if you don't have the code on your own machine** —
+it's all browser, and it tests the real thing rather than a laptop.
+
+---
+
+### 4a. Through Netlify (no terminal needed)
+
+**Set the environment variables.**
+Netlify → your site → **Site configuration → Environment variables** →
+*Add a variable* → *Add a single variable*, four times:
+
+| Key | Value |
+| --- | ----- |
+| `INTRANET_ENABLED` | `true` |
+| `SUPABASE_URL` | the Project URL from step 1 |
+| `SUPABASE_ANON_KEY` | the anon key from step 1 |
+| `INTRANET_EMAIL_DOMAIN` | `dcwcost.com` |
+
+**Scope `INTRANET_ENABLED` to deploy previews only** — when adding it, choose
+*Different value for each deploy context* and set it only for **Deploy
+Previews**, leaving Production blank. That way the intranet is reachable on the
+preview URL for testing but stays switched off on dcwcost.com even if the
+branch is merged by accident. The other three are safe in all contexts.
+
+**Get the preview URL.** Open the pull request on GitHub. Netlify comments on
+it with a **Deploy Preview** link, something like
+`https://deploy-preview-1--yoursite.netlify.app`. If the deploy ran before you
+added the variables, hit *Retry deploy* in Netlify so it picks them up.
+
+**Tell Supabase about that URL.** Supabase → **Authentication → URL
+Configuration → Redirect URLs** → add:
+
+```
+https://deploy-preview-1--yoursite.netlify.app/teamintranet/auth/callback
+```
+
+substituting your actual preview URL. Without this, Microsoft will authenticate
+you and then Supabase will refuse to hand the session back.
+
+**Then visit** `<your-preview-url>/teamintranet/` and sign in.
+
+While you're on the preview, **also submit the contact form** and check it
+arrives in Netlify → **Forms**. Adding the server-rendering adapter changed how
+the site deploys, and this is the one thing that could plausibly have broken.
+Better to find out on a preview than on the live site.
+
+---
+
+### 4b. On your own machine
+
+Requires [Node.js 22+](https://nodejs.org) and a copy of the repository.
 Copy the template and fill in the two values from step 1:
 
 ```bash
