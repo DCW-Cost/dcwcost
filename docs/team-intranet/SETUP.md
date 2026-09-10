@@ -89,10 +89,24 @@ In the Supabase dashboard:
    `offline_access` are under API permissions and that admin consent was
    granted.
 2. **Authentication → URL Configuration**:
-   - **Site URL**: `http://localhost:4321` while developing; the real domain later
-   - **Redirect URLs** — add both:
-     - `http://localhost:4321/teamintranet/auth/callback`
-     - `https://dcwcost.com/teamintranet/auth/callback`
+   - **Site URL**: `https://dcwc.netlify.app`
+   - **Redirect URLs** — add:
+     - `https://dcwc.netlify.app/teamintranet/auth/callback`
+     - `https://deploy-preview-*--dcwc.netlify.app/teamintranet/auth/callback`
+       (wildcard, so every pull-request preview works without adding each one)
+     - `http://localhost:4321/teamintranet/auth/callback` — only if you'll run
+       the site on your own machine
+
+   **Which domain, and why it isn't dcwcost.com.** This repository is the site
+   published at **dcwc.netlify.app**. `dcwcost.com` is a separate, existing DCW
+   site that this code does not control and cannot add routes to, so the
+   intranet lives at `https://dcwc.netlify.app/teamintranet` — see
+   "Where this ends up living" at the bottom.
+
+   Sign-in uses whatever hostname actually served the page, so it works at any
+   of these without a code change. What matters is that the exact URL appears
+   on this allowlist; anything missing gets refused after Microsoft has already
+   authenticated, which is a confusing failure to debug.
 3. **SQL Editor** → paste the whole of
    [`schema.sql`](./schema.sql) and run it. That creates the tables, the
    row-level security policies, and the trigger that creates a profile when
@@ -242,3 +256,53 @@ The site builds to a static marketing site plus one serverless function for
 
 Rotate the Entra ID client secret before it expires, in Azure and then in
 Supabase. That is the one piece of scheduled maintenance this setup needs.
+
+---
+
+## Where this ends up living
+
+Worth being explicit, because there are two DCW sites and they are easy to
+confuse:
+
+| Site | What it is | Does this repo control it? |
+| ---- | ---------- | -------------------------- |
+| **dcwcost.com** | The existing DCW website | **No.** Built and hosted separately |
+| **dcwc.netlify.app** | This repository, deployed by Netlify | Yes |
+
+So the intranet lives at **`https://dcwc.netlify.app/teamintranet`**, and will
+keep living there until someone changes the hosting. Nothing in this build can
+put it on `dcwcost.com/teamintranet` — that would require this repository to
+replace the existing site, which is a much larger decision than standing up an
+internal tool.
+
+That is not a problem. The intranet is for the team, not for clients: it is
+behind a Microsoft sign-in, excluded from the sitemap, `noindex`ed and
+disallowed in `robots.txt`. Nobody will ever find it by browsing, so the
+hostname matters far less than it would for a public page.
+
+Three ways forward, in the order they are worth doing:
+
+1. **Leave it at `dcwc.netlify.app/teamintranet`.** Works today, costs nothing,
+   and the team bookmarks it. Fine for the pilot and probably for a good while
+   after.
+2. **Point a subdomain at it** — a `CNAME` for `intranet.dcwcost.com` at the
+   Netlify site, added by whoever manages DNS for dcwcost.com. Gives a
+   professional URL without touching the existing website at all, and is
+   completely independent of any decision about replacing it. Note that the
+   marketing pages in this repository would also answer on that hostname, which
+   is harmless but slightly odd; it can be redirected later if it bothers
+   anyone.
+3. **`dcwcost.com/teamintranet`** — only meaningful if this repository becomes
+   the DCW website. That is a business decision about the website, and the
+   intranet should not wait on it.
+
+Recommendation: ship on (1), move to (2) once the team is actually using it
+daily, and treat (3) as unrelated.
+
+One consequence worth knowing: `astro.config.mjs` sets
+`site: 'https://dcwcost.com'`, so the marketing pages in this repository
+declare `dcwcost.com` as their canonical URL even while served from
+`dcwc.netlify.app`. For a second copy of a marketing site that is the right
+setting — it stops this deployment competing with the real site in search
+results. It has no effect on the intranet, which uses the live request's own
+hostname for sign-in.
