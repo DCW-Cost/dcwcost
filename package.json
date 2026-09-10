@@ -9,6 +9,7 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'",
     "astro": "astro"
   },
   "dependencies": {

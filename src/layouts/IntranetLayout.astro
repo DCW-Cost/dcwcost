@@ -1,0 +1,89 @@
+---
+/**
+ * App shell for /teamintranet.
+ *
+ * Deliberately not the marketing Layout: no site header, no footer, no
+ * schema.org markup, and noindex on every page. This is an internal tool that
+ * happens to share a domain with the public site.
+ *
+ * Auth note: these pages are prerendered while the UI is being built against
+ * fixtures. Before this route ships they become `prerender = false` with the
+ * Netlify adapter, and the session check below stops being a placeholder.
+ * INTRANET_ENABLED gates the whole area so an accidental merge cannot publish
+ * an internal-looking tool onto the live marketing site.
+ */
+import '../styles/intranet.css';
+import Sidebar from '../components/intranet/Sidebar.astro';
+import { provider, usingFixtures } from '../lib/intranet/data/index.ts';
+
+export interface Props {
+  title: string;
+  crumb?: string;
+  meta?: string[];
+  section: 'library' | 'estimates' | 'queue' | 'admin';
+}
+
+const { title, crumb, meta = [], section } = Astro.props;
+
+const enabled = import.meta.env.INTRANET_ENABLED === 'true';
+const user = await provider.getCurrentUser();
+const openQuestions = (await provider.getOpenQuestions()).length;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Internal tool. Never index, never follow. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{title} — DCW Team Intranet</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="intranet">
+    {
+      !enabled && (
+        <div class="fixture-strip">
+          Preview build · set INTRANET_ENABLED=true to serve these routes · not for production
+        </div>
+      )
+    }
+    {
+      usingFixtures && (
+        <div class="fixture-strip">
+          Demo data — invented figures and generic project names, not real DCW cost data
+        </div>
+      )
+    }
+
+    <div class="shell">
+      <Sidebar section={section} user={user} openQuestions={openQuestions} />
+
+      <main class="app">
+        <div class="topbar">
+          {crumb && <div class="crumb">{crumb}</div>}
+          <div class="title-row">
+            <h1>{title}</h1>
+            {
+              meta.length > 0 && (
+                <div class="title-meta">
+                  {meta.map((m) => (
+                    <span>{m}</span>
+                  ))}
+                </div>
+              )
+            }
+          </div>
+        </div>
+
+        <slot />
+      </main>
+    </div>
+  </body>
+</html>

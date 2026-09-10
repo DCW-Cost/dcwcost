@@ -23,6 +23,38 @@ Built with [Astro](https://astro.build) and deployed on
 | `/employee-owned`     | The EOT story                                                    |
 | `/contact`            | Offices, phone, email, and an enquiry form                       |
 
+## Team intranet (`/teamintranet`) — in development
+
+An internal cost-estimating tool living alongside the marketing site. See
+[`docs/team-intranet/PLAN.md`](docs/team-intranet/PLAN.md) for the full design
+and [`schema.sql`](docs/team-intranet/schema.sql) for the database.
+
+| Route | Screen |
+| ----- | ------ |
+| `/teamintranet/` | Cost Library — every element, with its confidence verdict |
+| `/teamintranet/library/[code]` | One element: range, sources, excluded outliers |
+| `/teamintranet/estimates/` | Estimates in progress |
+| `/teamintranet/estimates/[id]/brief` | What the reader understood from the client's documents |
+| `/teamintranet/estimates/[id]` | The Estimate Builder |
+| `/teamintranet/queue/` | Reader Queue — the reader's open questions |
+| `/teamintranet/admin/` | Account approval and thresholds |
+
+**Status.** The UI is real and the statistics are real — outlier rejection,
+the confidence gate and the trend test all run for genuine
+(`src/lib/intranet/stats.ts`, covered by `npm test`). The *data* is not: it
+comes from `src/lib/intranet/data/fixtures.ts` and every figure is invented.
+Both banners at the top of each page say so.
+
+**Not ready to merge to `main`.** These routes are prerendered and unauthenticated
+while the UI is built. Before they ship they need the Netlify adapter with
+`prerender = false`, Entra ID sign-in, and a real data provider. Until then
+`INTRANET_ENABLED` is unset, `/teamintranet` is excluded from the sitemap, the
+pages carry `noindex`, and `robots.txt` disallows the path.
+
+**Swapping in real data.** Pages only ever import `provider` from
+`src/lib/intranet/data/`. Implement the `DataProvider` interface in a
+`supabase.ts` alongside `fixtures.ts` and switch the resolver — no page changes.
+
 ## Content lives in data files
 
 Editable content is centralized in `src/data/` so copy changes don't require

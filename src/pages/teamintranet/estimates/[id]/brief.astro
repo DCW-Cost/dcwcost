@@ -1,0 +1,172 @@
+---
+import IntranetLayout from '../../../../layouts/IntranetLayout.astro';
+import { provider } from '../../../../lib/intranet/data/index.ts';
+import { money } from '../../../../lib/intranet/library.ts';
+
+export async function getStaticPaths() {
+  const list = await provider.listEstimates();
+  return list.map((e) => ({ params: { id: e.id } }));
+}
+
+const estimate = await provider.getEstimate(Astro.params.id!);
+if (!estimate) return Astro.redirect('/teamintranet/estimates/');
+const { brief, inputs } = estimate;
+
+const totalMixSf = brief.programMix.reduce((a, m) => a + m.sf, 0);
+
+const tagStyle: Record<string, string> = {
+  include: 'background:var(--go-bg);color:var(--go);border:1px solid var(--go-line)',
+  exclude: 'background:var(--stop-bg);color:var(--stop);border:1px solid var(--stop-line)',
+  alternate: 'background:var(--sunk);color:var(--muted);border:1px solid var(--line-2)',
+  allowance: 'background:var(--sunk);color:var(--muted);border:1px solid var(--line-2)',
+};
+---
+
+<IntranetLayout
+  title={estimate.name}
+  crumb="Estimate Builder / Project brief"
+  section="estimates"
+  meta={[`${inputs.length} documents read`, brief.location, brief.deliveryMethod]}
+>
+  <div class="pane">
+    <h2>What the reader understood</h2>
+    <p class="lede">
+      Check this once and everything downstream inherits it. A wrong number here is
+      wrong in every line of the estimate, so it is the highest-leverage screen in
+      the flow.
+    </p>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Documents read</h3>
+        <span class="hint">{inputs.length} files</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="data" style="min-width:520px">
+          <thead>
+            <tr>
+              <th style="width:7rem">Kind</th>
+              <th>File</th>
+              <th style="width:16rem">Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              inputs.map((f) => (
+                <tr>
+                  <td>
+                    <span
+                      class="chip excluded"
+                      style="color:var(--blue);border-color:var(--line-2)"
+                    >
+                      {f.kind}
+                    </span>
+                  </td>
+                  <td class="num" style="white-space:normal;overflow-wrap:anywhere">
+                    {f.filename}
+                  </td>
+                  <td class="hint">{f.status}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Project brief</h3><span class="hint">from {inputs.length} documents</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:0 1.6rem">
+          {
+            [
+              ['Gross area', brief.grossSf.toLocaleString('en-US') + ' GSF', 'DD drawing set, sheet A0.01'],
+              ['Sector', brief.sector, 'RFP §1.1'],
+              ['Location', brief.location, 'RFP cover'],
+              ['Delivery', brief.deliveryMethod, 'RFP §2.3'],
+              ['Design phase', brief.phase, 'drawing set title block'],
+              ['Constr. start', brief.constructionStart, 'RFP §2.6 schedule'],
+              [
+                'Midpoint',
+                brief.constructionMidpoint,
+                brief.midpointAssumed ? 'ASSUMED · 17-month duration' : 'stated',
+              ],
+              ['Client budget', brief.statedBudget ? money(brief.statedBudget) : '—', 'RFP §2.8'],
+            ].map(([label, value, src]) => (
+              <div style="display:grid;grid-template-columns:8.5rem 1fr;gap:.7rem;padding:.45rem 0;border-bottom:1px solid var(--line);align-items:baseline">
+                <span style="font-size:.76rem;color:var(--muted)">{label}</span>
+                <span>
+                  <span class="num" style="color:var(--ink)">{value}</span>
+                  <span
+                    class="sub"
+                    style={String(src).startsWith('ASSUMED') ? 'color:var(--hold)' : ''}
+                  >
+                    {src}
+                  </span>
+                </span>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Program mix</h3>
+        <span class="hint">drives which elements appear, not just their rates</span>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 1.6rem">
+          {
+            brief.programMix.map((m) => (
+              <div style="display:grid;grid-template-columns:9rem 1fr;gap:.7rem;padding:.45rem 0;border-bottom:1px solid var(--line);align-items:baseline">
+                <span style="font-size:.76rem;color:var(--muted)">{m.use}</span>
+                <span class="num" style="color:var(--ink)">
+                  {m.sf.toLocaleString('en-US')} SF · {Math.round((m.sf / totalMixSf) * 100)}%
+                </span>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Scope requirements</h3>
+        <span class="hint">{brief.requirements.length} that move a number</span>
+      </div>
+      <div class="card-body">
+        <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5rem">
+          {
+            brief.requirements.map((r) => (
+              <li style="display:grid;grid-template-columns:5.6rem 1fr;gap:.7rem;align-items:baseline;padding-bottom:.5rem;border-bottom:1px solid var(--line)">
+                <span
+                  style={`font-family:var(--brand);font-size:.6rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.1rem .35rem;border-radius:2px;text-align:center;${tagStyle[r.type]}`}
+                >
+                  {r.type}
+                </span>
+                <span>
+                  {r.text}
+                  <span class="sub">
+                    {r.cite}
+                    {r.appliesTo?.length ? ` · applies to ${r.appliesTo.join(', ')}` : ''}
+                  </span>
+                </span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+
+    <div class="bar-actions">
+      <a class="btn primary" href={`/teamintranet/estimates/${estimate.id}/`}>
+        Looks right — build the estimate →
+      </a>
+      <span class="spacer"></span>
+      <a class="btn ghost" href="/teamintranet/estimates/">← All estimates</a>
+    </div>
+  </div>
+</IntranetLayout>

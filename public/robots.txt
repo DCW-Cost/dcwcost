@@ -1,4 +1,10 @@
 User-agent: *
 Allow: /
 
+# Internal team tool. Not for indexing.
+# Belt and braces with the noindex meta tag in IntranetLayout.astro and the
+# sitemap filter in astro.config.mjs — robots.txt asks crawlers not to fetch,
+# the meta tag tells them not to index if they do anyway.
+Disallow: /teamintranet
+
 Sitemap: https://dcwcost.com/sitemap-index.xml

@@ -1,0 +1,47 @@
+---
+import type { Profile } from '../../lib/intranet/data/types.ts';
+
+export interface Props {
+  section: 'library' | 'estimates' | 'queue' | 'admin';
+  user: Profile;
+  openQuestions: number;
+}
+
+const { section, user, openQuestions } = Astro.props;
+
+const links = [
+  { key: 'library', href: '/teamintranet/', label: 'Cost Library' },
+  { key: 'estimates', href: '/teamintranet/estimates/', label: 'Estimate Builder' },
+  { key: 'queue', href: '/teamintranet/queue/', label: 'Reader Queue', badge: openQuestions },
+  { key: 'admin', href: '/teamintranet/admin/', label: 'Admin', adminOnly: true },
+] as const;
+
+const roleLabel = user.role === 'admin' ? 'Admin' : user.role === 'estimator' ? 'Estimator' : 'Viewer';
+---
+
+<aside class="side">
+  <a class="brandmark" href="/teamintranet/">DCW</a>
+  <div class="brandsub">/teamintranet</div>
+
+  <nav aria-label="Sections">
+    <ul>
+      {
+        links
+          .filter((l) => !('adminOnly' in l && l.adminOnly) || user.role === 'admin')
+          .map((l) => (
+            <li>
+              <a href={l.href} aria-current={section === l.key ? 'page' : undefined}>
+                <span>{l.label}</span>
+                {'badge' in l && l.badge ? <span class="badge">{l.badge}</span> : null}
+              </a>
+            </li>
+          ))
+      }
+    </ul>
+  </nav>
+
+  <div class="whoami">
+    <b>{user.fullName}</b>
+    {roleLabel} · signed in with Microsoft
+  </div>
+</aside>

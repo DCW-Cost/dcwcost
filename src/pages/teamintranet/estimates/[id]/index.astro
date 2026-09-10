@@ -1,0 +1,355 @@
+---
+import IntranetLayout from '../../../../layouts/IntranetLayout.astro';
+import { provider } from '../../../../lib/intranet/data/index.ts';
+import { proposeLines, totals } from '../../../../lib/intranet/builder.ts';
+import { money, rate } from '../../../../lib/intranet/library.ts';
+
+export async function getStaticPaths() {
+  const list = await provider.listEstimates();
+  return list.map((e) => ({ params: { id: e.id } }));
+}
+
+const estimate = await provider.getEstimate(Astro.params.id!);
+if (!estimate) return Astro.redirect('/teamintranet/estimates/');
+
+const { brief } = estimate;
+// Lines are proposed live from the library, filtered by this project's brief —
+// the same pipeline the real builder runs, not a canned list.
+const lines = await proposeLines(provider, brief);
+const t = totals(lines, brief.grossSf);
+const greenCount = lines.filter((l) => l.confidence === 'green').length;
+---
+
+<IntranetLayout
+  title={estimate.name}
+  crumb="Estimate Builder / Draft"
+  section="estimates"
+  meta={[
+    `${brief.grossSf.toLocaleString('en-US')} GSF`,
+    brief.sector,
+    brief.phase,
+    `Constr. midpoint ${brief.constructionMidpoint}`,
+  ]}
+>
+  <div class="pane">
+    {
+      brief.midpointAssumed && (
+        <div class="verdict-box amber" id="assumption" style="margin-bottom:1.1rem">
+          <span class="dot" aria-hidden="true" />
+          <span style="flex:1">
+            <b>Confirm — construction midpoint</b>
+            <span id="assumption-text">
+              The RFP gives an {brief.constructionStart} start but no duration, so I've assumed{' '}
+              <strong>{brief.constructionMidpoint}</strong> from comparable civic projects. Every
+              rate below is escalated to that date.
+            </span>
+            <p class="hint" style="margin:.4rem 0 0">
+              {brief.constructionStart} start · 3 comparables averaged 16.8 months · shifting one
+              quarter moves the total ≈ $94,000
+            </p>
+            <p style="margin:.6rem 0 0;display:flex;gap:.4rem;flex-wrap:wrap">
+              <button class="btn primary" id="confirm-midpoint" type="button">
+                Confirm {brief.constructionMidpoint}
+              </button>
+              <button class="btn" type="button">Set a different date</button>
+            </p>
+          </span>
+        </div>
+      )
+    }
+
+    <dl class="tiles">
+      <div class="tile">
+        <dt>Bare subtotal</dt>
+        <dd id="t-sub">{money(t.bareSubtotal)}</dd>
+      </div>
+      <div class="tile">
+        <dt>Per GSF</dt>
+        <dd id="t-psf">
+          {rate(t.perSf)}<small>bare, {brief.grossSf.toLocaleString('en-US')} GSF</small>
+        </dd>
+      </div>
+      <div class="tile">
+        <dt>Settled</dt>
+        <dd id="t-acc">{t.settledLines} / {t.pricedLines}<small>priced lines</small></dd>
+      </div>
+      <div class="tile warn">
+        <dt>Needs you</dt>
+        <dd id="t-open">
+          {t.unpricedLines}<small>unpriced element{t.unpricedLines === 1 ? '' : 's'}</small>
+        </dd>
+      </div>
+      <div class="tile">
+        <dt>Client budget</dt>
+        <dd>{brief.statedBudget ? money(brief.statedBudget) : '—'}<small>RFP §2.8</small></dd>
+      </div>
+    </dl>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Elemental estimate — UniFormat</h3>
+        <span class="hint">rates are $/GSF, bare · markups applied on export</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="data" id="est-table" data-gsf={brief.grossSf}>
+          <thead>
+            <tr>
+              <th style="width:2.6rem"></th>
+              <th style="width:4.2rem">Code</th>
+              <th>Element</th>
+              <th style="width:8rem">Confidence</th>
+              <th class="r" style="width:8rem">Rate $/GSF</th>
+              <th class="r" style="width:8.5rem">Extended</th>
+              <th style="width:9rem">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              lines.map((l) => {
+                const isExcluded = l.disposition === 'excluded_by_requirement';
+                const blank = l.finalRate == null;
+                return (
+                  <>
+                    <tr class="row" data-code={l.taxonomyCode} style={isExcluded ? 'opacity:.6' : ''}>
+                      <td>
+                        <button
+                          class="btn ghost"
+                          type="button"
+                          data-toggle={l.taxonomyCode}
+                          aria-expanded="false"
+                          aria-controls={`d-${l.taxonomyCode}`}
+                          aria-label={`Show sources for ${l.taxonomyCode}`}
+                          style="padding:.1rem .4rem"
+                        >
+                          +
+                        </button>
+                      </td>
+                      <td><span class="code">{l.taxonomyCode}</span></td>
+                      <td>
+                        <span class="elem">{l.title}</span>
+                        {l.note && <span class="sub">{l.note}</span>}
+                        {l.excludedSource && <span class="sub">{l.excludedSource}</span>}
+                      </td>
+                      <td>
+                        <span class={`chip ${l.confidence}`}>
+                          <span class="d" /> {l.confidence}
+                        </span>
+                      </td>
+                      <td class="r">
+                        {isExcluded ? (
+                          <span class="num" style="opacity:.5">—</span>
+                        ) : (
+                          <input
+                            class="num rate-input"
+                            type="text"
+                            inputmode="decimal"
+                            id={`rate-${l.taxonomyCode}`}
+                            data-original={l.suggestedRate ?? ''}
+                            value={l.finalRate == null ? '' : l.finalRate.toFixed(2)}
+                            placeholder="—"
+                            aria-label={`Rate per GSF for ${l.taxonomyCode} ${l.title}`}
+                            style={`width:6.2rem;text-align:right;padding:.25rem .4rem;border:1px solid ${
+                              blank ? 'var(--stop-line)' : 'var(--line-2)'
+                            };border-radius:3px;background:${
+                              blank ? 'var(--stop-bg)' : 'var(--paper)'
+                            };color:var(--ink);font-size:.86rem`}
+                          />
+                        )}
+                      </td>
+                      <td class="num r ext">
+                        {l.finalRate != null ? money(l.finalRate * brief.grossSf) : '—'}
+                      </td>
+                      <td class="statuscell">
+                        <span class="hint">
+                          {isExcluded
+                            ? 'Excluded'
+                            : blank
+                              ? 'Price manually'
+                              : 'Proposed'}
+                        </span>
+                      </td>
+                    </tr>
+
+                    <tr class="reason-row" id={`reason-${l.taxonomyCode}`} hidden>
+                      <td colspan="7" style="background:var(--sunk);padding:.2rem .7rem .7rem 3.1rem">
+                        <label
+                          for={`why-${l.taxonomyCode}`}
+                          style="font-size:.76rem;color:var(--muted);display:block;margin-bottom:.25rem"
+                        >
+                          Why did you override this? (captured as signal for next time)
+                        </label>
+                        <select id={`why-${l.taxonomyCode}`} style="font-size:.8rem;padding:.28rem .4rem;border:1px solid var(--line-2);border-radius:3px;background:var(--paper);color:var(--ink)">
+                          <option value="">Choose a reason…</option>
+                          <option value="scope">Scope differs from the comparables</option>
+                          <option value="market">Local market knowledge</option>
+                          <option value="design">Design approach differs</option>
+                          <option value="quote">Have a subcontractor quote</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </td>
+                    </tr>
+
+                    <tr class="detail-row" id={`d-${l.taxonomyCode}`} hidden>
+                      <td colspan="7" style="background:var(--sunk);padding:.9rem 1rem 1.1rem 3.1rem">
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem 1.6rem">
+                          <div>
+                            <h4 style="font-family:var(--brand);font-size:.63rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 .45rem">
+                              Why this number
+                            </h4>
+                            <p class="note-serif" style="margin:0 0 .5rem">
+                              {l.suggestedReason ||
+                                'Excluded by a client requirement — no rate proposed.'}
+                            </p>
+                            {l.blankReason && (
+                              <p class="note-serif" style="margin:0;color:var(--stop)">
+                                Left blank on purpose — {l.blankReason}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <h4 style="font-family:var(--brand);font-size:.63rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 .45rem">
+                              Source observations
+                            </h4>
+                            {l.observations.length ? (
+                              <ul style="list-style:none;margin:0;padding:0;font-family:var(--mono);font-size:.74rem;display:flex;flex-direction:column;gap:.28rem">
+                                {l.observations.map((o) => (
+                                  <li
+                                    style={`display:flex;justify-content:space-between;gap:.8rem;color:var(--muted);border-bottom:1px dotted var(--line-2);padding-bottom:.26rem${
+                                      o.excluded ? ';text-decoration:line-through;opacity:.6' : ''
+                                    }`}
+                                  >
+                                    <span>{o.label}</span>
+                                    <b style="color:var(--body);font-weight:500">{o.value}</b>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p class="hint" style="margin:0">No comparable observations.</p>
+                            )}
+                          </div>
+                          {l.attribution && (
+                            <div>
+                              <h4 style="font-family:var(--brand);font-size:.63rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 .45rem">
+                                Worth knowing
+                              </h4>
+                              <p class="attrib">{l.attribution}</p>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  </>
+                );
+              })
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="bar-actions">
+      <button class="btn primary" id="accept-green" type="button">Accept all green lines</button>
+      <span class="hint" id="accept-hint">{greenCount} lines ready to accept</span>
+      <span class="spacer"></span>
+      <a class="btn" href={`/teamintranet/estimates/${estimate.id}/brief/`}>Review the brief</a>
+    </div>
+  </div>
+</IntranetLayout>
+
+<script>
+  // Progressive enhancement: the table is fully readable without JS. This adds
+  // the working parts — disclosure, live recalculation, override capture.
+  const table = document.getElementById('est-table');
+  if (table) {
+    const gsf = Number(table.dataset.gsf);
+    const money = (n) => '$' + Math.round(n).toLocaleString('en-US');
+
+    const recalc = () => {
+      let sum = 0;
+      let priced = 0;
+      let settled = 0;
+      let unpriced = 0;
+
+      table.querySelectorAll('tr.row').forEach((row) => {
+        const input = row.querySelector('.rate-input');
+        if (!input) return; // excluded line
+        const v = parseFloat(input.value);
+        if (Number.isFinite(v)) {
+          sum += v * gsf;
+          priced++;
+          if (row.dataset.settled === 'true') settled++;
+        } else {
+          unpriced++;
+        }
+      });
+
+      document.getElementById('t-sub').textContent = money(sum);
+      document.getElementById('t-psf').innerHTML =
+        '$' + (gsf ? sum / gsf : 0).toFixed(2) +
+        '<small>bare, ' + gsf.toLocaleString('en-US') + ' GSF</small>';
+      document.getElementById('t-acc').innerHTML =
+        settled + ' / ' + priced + '<small>priced lines</small>';
+      document.getElementById('t-open').innerHTML =
+        unpriced + '<small>unpriced element' + (unpriced === 1 ? '' : 's') + '</small>';
+    };
+
+    table.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-toggle]');
+      if (!btn) return;
+      const detail = document.getElementById('d-' + btn.dataset.toggle);
+      const open = detail.hidden;
+      detail.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? '−' : '+';
+    });
+
+    // Mutate in place rather than re-rendering, so the caret never jumps.
+    table.addEventListener('input', (e) => {
+      const input = e.target.closest('.rate-input');
+      if (!input) return;
+      const row = input.closest('tr.row');
+      const code = row.dataset.code;
+      const v = parseFloat(input.value);
+      const original = input.dataset.original === '' ? null : parseFloat(input.dataset.original);
+      const valid = Number.isFinite(v);
+      const edited = valid && (original == null || Math.abs(v - original) > 0.001);
+
+      row.dataset.settled = String(edited);
+      row.querySelector('.ext').textContent = valid ? money(v * gsf) : '—';
+      input.style.borderColor = valid ? 'var(--line-2)' : 'var(--stop-line)';
+      input.style.background = valid ? 'var(--paper)' : 'var(--stop-bg)';
+
+      row.querySelector('.statuscell').innerHTML = edited
+        ? '<span class="hint" style="color:var(--blue);font-weight:500">✎ ' +
+          (original == null ? 'Priced manually' : 'Overridden') + '</span>'
+        : valid
+          ? '<span class="hint">Proposed</span>'
+          : '<span class="hint">Price manually</span>';
+
+      document.getElementById('reason-' + code).hidden = !edited;
+      recalc();
+    });
+
+    document.getElementById('accept-green')?.addEventListener('click', () => {
+      table.querySelectorAll('tr.row').forEach((row) => {
+        const chip = row.querySelector('.chip.green');
+        if (!chip) return;
+        row.dataset.settled = 'true';
+        row.querySelector('.statuscell').innerHTML =
+          '<span class="hint" style="color:var(--go);font-weight:500">✓ Accepted</span>';
+      });
+      document.getElementById('accept-hint').textContent = 'All green lines accepted';
+      recalc();
+    });
+
+    document.getElementById('confirm-midpoint')?.addEventListener('click', () => {
+      const box = document.getElementById('assumption');
+      box.classList.remove('amber');
+      box.classList.add('green');
+      box.querySelector('b').textContent = 'Confirmed — construction midpoint';
+      box.querySelector('#assumption-text').textContent =
+        'Confirmed by Katya M. today. This confirmation now travels with every rate it affected, and shows in the drill-down of each line below.';
+      box.querySelectorAll('p').forEach((p) => p.remove());
+    });
+  }
+</script>
