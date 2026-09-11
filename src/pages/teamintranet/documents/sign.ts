@@ -92,7 +92,17 @@ export const POST: APIRoute = async ({ cookies, request }) => {
     .single();
 
   if (insertError || !row) {
-    return bad(insertError?.message ?? 'Could not register the document.');
+    const message = insertError?.message ?? '';
+    // 001 required every deliverable to have a source the moment it was
+    // created, which a two-step upload cannot satisfy — the file has not
+    // arrived yet. 002 relaxes it for rows still in flight.
+    if (message.includes('deliverables_has_a_source')) {
+      return bad(
+        'The database still has the old single-step upload rule. ' +
+          'Run migrations/002_pending_uploads.sql in Supabase, then try again.'
+      );
+    }
+    return bad(message || 'Could not register the document.');
   }
 
   // The object key is the deliverable's uuid, never the filename: two people
