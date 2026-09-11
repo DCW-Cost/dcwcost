@@ -107,7 +107,7 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
     <div class="card" style="margin-top:1.1rem">
       <div class="card-head"><b>Upload a cost plan</b></div>
       <div class="card-body">
-        <form method="POST" enctype="multipart/form-data" class="uform">
+        <form method="POST" enctype="multipart/form-data" class="uform" id="uform">
           <label class="ufield">
             <span class="sub">The document — PDF, Excel or CSV, up to 50 MB</span>
             <input type="file" name="file" accept={ACCEPT_ATTR} required />
@@ -153,10 +153,11 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
             blank is better than approximately right.
           </p>
 
-          <div>
-            <button class="btn primary" type="submit" disabled={!uploadsEnabled}>
+          <div class="usubmit">
+            <button class="btn primary" type="submit" id="ubtn" disabled={!uploadsEnabled}>
               Upload and queue
             </button>
+            <span id="ustatus" class="ustatus" role="status" aria-live="polite"></span>
           </div>
         </form>
       </div>
@@ -256,6 +257,106 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
   </div>
 </IntranetLayout>
 
+<script>
+  /**
+   * Upload the file straight to Supabase Storage, not through this server.
+   *
+   * Posting a multi-megabyte cost plan as multipart form data to a serverless
+   * function hits a payload limit and comes back as a bare HTTP 400 — no error
+   * page, no log, nothing to read. So the form is intercepted: the server gets
+   * a few hundred bytes of JSON and returns a signed URL, and the browser does
+   * the actual transfer.
+   *
+   * The plain form POST underneath still works as a fallback if this script
+   * never runs, which is why the markup is a real form rather than a div.
+   */
+  const form = document.getElementById('uform');
+  const btn = document.getElementById('ubtn');
+  const status = document.getElementById('ustatus');
+
+  function say(message, tone) {
+    if (!status) return;
+    status.textContent = message;
+    status.dataset.tone = tone || '';
+  }
+
+  form?.addEventListener('submit', async (event) => {
+    const fileInput = form.querySelector('input[name="file"]');
+    const file = fileInput?.files?.[0];
+    if (!file) return;                     // let the browser's own validation speak
+
+    event.preventDefault();
+    if (btn) btn.disabled = true;
+    say('Preparing…');
+
+    const data = new FormData(form);
+    let registered = null;
+
+    try {
+      // 1 — register the document, get a signed URL back
+      const signRes = await fetch('/teamintranet/documents/sign', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          size: file.size,
+          projectId: data.get('project_id') || '',
+          newProjectName: data.get('new_project') || '',
+          estimator: data.get('estimator') || '',
+          issueDate: data.get('issue_date') || '',
+          notes: data.get('notes') || '',
+        }),
+      });
+
+      const signed = await signRes.json().catch(() => ({}));
+      if (!signRes.ok) throw new Error(signed.error || 'Could not prepare the upload.');
+      registered = signed.deliverableId;
+
+      // 2 — send the file itself to Supabase. The shape here mirrors what the
+      // Supabase client sends for a Blob: multipart, cacheControl first, the
+      // file under an empty field name.
+      say(`Uploading ${file.name}…`);
+      const payload = new FormData();
+      payload.append('cacheControl', '3600');
+      payload.append('', file);
+
+      const put = await fetch(signed.signedUrl, { method: 'PUT', body: payload });
+      if (!put.ok) {
+        const detail = await put.text().catch(() => '');
+        throw new Error(`Storage rejected the file (${put.status}). ${detail.slice(0, 200)}`);
+      }
+
+      // 3 — only now does the row get a storage path
+      const confirm = await fetch('/teamintranet/documents/confirm', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deliverableId: registered, path: signed.path, ok: true }),
+      });
+      if (!confirm.ok) {
+        const detail = await confirm.json().catch(() => ({}));
+        throw new Error(detail.error || 'Uploaded, but could not record it.');
+      }
+
+      window.location.href =
+        '/teamintranet/documents/?ok=' +
+        encodeURIComponent('Stored. It is queued for the reader.');
+    } catch (error) {
+      // Tear down the half-made row so the list never shows a document whose
+      // file is absent.
+      if (registered) {
+        await fetch('/teamintranet/documents/confirm', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ deliverableId: registered, ok: false }),
+        }).catch(() => {});
+      }
+      say(error instanceof Error ? error.message : String(error), 'bad');
+      if (btn) btn.disabled = false;
+    }
+  });
+</script>
+
+
 <style>
   .vbox {
     display: flex;
@@ -309,6 +410,10 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
   .ufield input[type='file'] { padding: 0.5rem; }
   .ufield input:focus-visible,
   .ufield select:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+  .usubmit { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+  .ustatus { font-size: 0.82rem; color: var(--muted); }
+  .ustatus[data-tone='bad'] { color: var(--stop); }
 
   .steps { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.6rem; }
   .steps li { font-size: 0.86rem; color: var(--body); }
