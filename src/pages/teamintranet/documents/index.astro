@@ -242,9 +242,15 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
                     <td>{humanSize(d.byteSize)}</td>
                     <td>{d.uploadedAt ? formatDate(d.uploadedAt) : '—'}</td>
                     <td>
-                      <span class={`chip ${STATUS_TONE[d.status]}`}>
-                        {STATUS_LABEL[d.status]}
-                      </span>
+                      {d.hasFile ? (
+                        <span class={`chip ${STATUS_TONE[d.status]}`}>
+                          {STATUS_LABEL[d.status]}
+                        </span>
+                      ) : (
+                        <span class="chip red" title="Registered, but the file never arrived">
+                          Upload incomplete
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

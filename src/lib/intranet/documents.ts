@@ -38,6 +38,12 @@ export interface UploadedDoc {
   issueDate: string | null;
   estimator: string | null;
   notes: string | null;
+  /**
+   * False while a row is registered but its file has not landed yet. Anything
+   * that reads a deliverable must skip these — `storage_path` is set only by
+   * /documents/confirm, so NULL means "not uploaded", never "lost".
+   */
+  hasFile: boolean;
 }
 
 export const STATUS_LABEL: Record<IngestStatus, string> = {
@@ -120,7 +126,7 @@ export async function listDocuments(
   const { data, error } = await supabase
     .from('deliverables')
     .select(
-      'id, original_filename, status, uploaded_at, byte_size, issue_date, estimator, upload_notes'
+      'id, original_filename, status, uploaded_at, byte_size, issue_date, estimator, upload_notes, storage_path, airtable_record_id'
     )
     .eq('source', 'upload')
     .order('uploaded_at', { ascending: false })
@@ -146,6 +152,7 @@ export async function listDocuments(
     issueDate: (r.issue_date as string) ?? null,
     estimator: (r.estimator as string) ?? null,
     notes: (r.upload_notes as string) ?? null,
+    hasFile: Boolean(r.storage_path ?? r.airtable_record_id),
   }));
 
   return { docs, error: null };
