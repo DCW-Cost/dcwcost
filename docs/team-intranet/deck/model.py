@@ -231,20 +231,26 @@ field(ws, 16, 'Equivalent full-time estimators', '=IF(Inputs!B14=0,0,B14/Inputs!
       'Capacity you do not have to hire for.', kind='calc')
 ws['B16'].font = BIG
 
-section(ws, 18, 'VALUED TWO WAYS  —  these need the placeholder rates')
-field(ws, 19, 'At internal cost of the paid hours', '=B15*Inputs!B5', MONEY0,
-      'The saving if the hours simply disappear from fixed-fee work.', kind='calc')
-field(ws, 20, 'At billing rate, if resold', '=B14*Inputs!B6', MONEY0,
+section(ws, 18, 'VALUED THREE WAYS  —  these are the only lines needing a rate')
+field(ws, 19, 'Direct cost of the freed hours', '=B14*Inputs!B5', MONEY0,
+      'The conservative figure, and the one on the deck. Freed billable hours × the loaded '
+      'rate, claiming nothing for the overhead those hours carry.', kind='calc')
+ws['B19'].font = BIG
+field(ws, 20, 'Including the overhead they carry', '=B15*Inputs!B5', MONEY0,
+      'The same hours × 1.38. Defensible — the analysis says a rate clearing only the billable '
+      'hour is short by 38% — but it assumes the absorbed project time scales down with the '
+      'work. Kept off the slide for that reason.', kind='calc')
+field(ws, 21, 'At billing rate, if resold', '=B14*Inputs!B6', MONEY0,
       'The ceiling — only realised if there is demand to absorb the freed capacity.',
       kind='calc')
 
-section(ws, 22, 'NET OF WHAT IT COSTS TO RUN')
-field(ws, 23, 'Annual cost to operate', '=Inputs!B26+Inputs!B27*Inputs!B5', MONEY0, '', kind='calc')
-field(ws, 24, 'Year-one cost including the archive read', '=B23+Inputs!B25', MONEY0, '', kind='calc')
-field(ws, 25, 'NET year-one benefit, at internal cost', '=B19-B24', MONEY0, '', kind='calc')
-ws['B25'].font = BIG
-field(ws, 26, 'Return on year-one cost', '=IF(B24=0,0,B25/B24)', X, '', kind='calc')
+section(ws, 23, 'NET OF WHAT IT COSTS TO RUN')
+field(ws, 24, 'Annual cost to operate', '=Inputs!B26+Inputs!B27*Inputs!B5', MONEY0, '', kind='calc')
+field(ws, 25, 'Year-one cost including the archive read', '=B24+Inputs!B25', MONEY0, '', kind='calc')
+field(ws, 26, 'NET year-one benefit, at direct cost', '=B19-B25', MONEY0, '', kind='calc')
 ws['B26'].font = BIG
+field(ws, 27, 'Return on year-one cost', '=IF(B25=0,0,B26/B25)', X, '', kind='calc')
+ws['B27'].font = BIG
 
 # ======================================================================
 # Fee & margin
@@ -375,7 +381,7 @@ field(ws, 24, 'Margin on that work', "=B23*'Fee & margin'!B10", MONEY0,
       'Can dwarf the time saving — and is the least certain line in the model.', kind='calc')
 
 section(ws, 26, 'THE THREE LEVERS TOGETHER')
-field(ws, 27, 'Capacity returned (net of run cost)', "='Time saved'!B25", MONEY0, '', kind='calc')
+field(ws, 27, 'Capacity returned (net of run cost)', "='Time saved'!B26", MONEY0, '', kind='calc')
 field(ws, 28, 'Rework avoided', '=B17', MONEY0, '', kind='calc')
 field(ws, 29, 'Win-rate upside (least certain)', '=B24', MONEY0, '', kind='calc')
 field(ws, 30, 'TOTAL year-one impact', '=B27+B28+B29', MONEY0, '', kind='calc')

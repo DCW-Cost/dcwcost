@@ -550,23 +550,23 @@ s.addNotes(
 // 12 — What an hour is worth
 // ========================================================================
 s = pres.addSlide();
-head(s, 'THE BUSINESS CASE', 'What a cost report actually costs us');
+head(s, 'THE BUSINESS CASE', 'What an estimator-hour is actually worth');
 
 s.addText(
-  'From 28,910 time entries and 57,887 logged hours — March 2021 to September 2026',
+  'Hours saved per report   ×   reports a year   ×   what an hour costs us   =   capacity returned',
   { x: M, y: 1.70, w: W, h: 0.3, isTextBox: true, margin: 0,
     fontFace: HEAD, fontSize: 12, bold: true, color: BLUE }
 );
 s.addText(
-  'These are not estimates any more. They are measured from our own Airtable time tracking.',
+  'A cost report takes 18.9 hours. 58.5% is report production — nearly 4× takeoff, and the Library’s target.',
   { x: M, y: 2.02, w: W, h: 0.28, isTextBox: true, margin: 0,
     fontFace: TEXT, fontSize: 10.5, color: MUTED }
 );
 
 const worth = [
-  ['18.9 hrs', 'is what a cost report\nactually takes — measured\nacross 720 tasks'],
-  ['11.1 hrs', 'of those go to report\nproduction — nearly 4×\ntakeoff. That is the target'],
-  ['~1,400 hrs', 'a year returned at a\nconservative 30% — about\none estimator'],
+  ['3.3 hrs', 'saved per cost report, out\nof the 11.1 that go to\nreport production'],
+  ['~1,400', 'hours a year across the\nreports where the Library\napplies — about one FTE'],
+  ['$136K', 'of estimating capacity\nreturned, at a $95/hour\nblended cost'],
 ];
 worth.forEach(([n, label], i) => {
   const x = M + i * (W / 3);
@@ -582,7 +582,7 @@ worth.forEach(([n, label], i) => {
 
 card(s, M, 4.16, W, 1.15, 'EAF6E6');
 s.addText(
-  'One judgement left: that the Library removes 30% of report production. Everything else here is measured. The only missing number is a dollar rate — and the hours case stands without one.',
+  'These are no longer estimates. The hours come from 28,910 time entries and 57,887 logged hours, March 2021 to September 2026 — our own Airtable. One judgement remains: that the Library removes 30% of report production. Only the $95 rate is still a placeholder.',
   { x: M + 0.35, y: 4.30, w: W - 0.7, h: 0.88, isTextBox: true, margin: 0,
     fontFace: TEXT, fontSize: 10.5, color: INK, lineSpacing: 15 }
 );
