@@ -550,23 +550,23 @@ s.addNotes(
 // 12 — What an hour is worth
 // ========================================================================
 s = pres.addSlide();
-head(s, 'THE BUSINESS CASE', 'What an estimator-hour is actually worth');
+head(s, 'THE BUSINESS CASE', 'What a cost report actually costs us');
 
 s.addText(
-  'Hours saved per plan   ×   plans a year   ×   what an hour costs us   =   capacity returned',
+  'From 28,910 time entries and 57,887 logged hours — March 2021 to September 2026',
   { x: M, y: 1.70, w: W, h: 0.3, isTextBox: true, margin: 0,
     fontFace: HEAD, fontSize: 12, bold: true, color: BLUE }
 );
 s.addText(
-  'The Library does not remove judgment. It removes the digging that comes before it.',
+  'These are not estimates any more. They are measured from our own Airtable time tracking.',
   { x: M, y: 2.02, w: W, h: 0.28, isTextBox: true, margin: 0,
     fontFace: TEXT, fontSize: 10.5, color: MUTED }
 );
 
 const worth = [
-  ['3.5 hrs', 'saved per cost plan on\nhistorical research and\nfirst-pass pricing'],
-  ['~1,500', 'hours a year across the\nplans where the Library\napplies — about one FTE'],
-  ['$140K', 'of estimating capacity\nreturned, at a $95/hour\nblended cost'],
+  ['18.9 hrs', 'is what a cost report\nactually takes — measured\nacross 720 tasks'],
+  ['11.1 hrs', 'of those go to report\nproduction — nearly 4×\ntakeoff. That is the target'],
+  ['~1,400 hrs', 'a year returned at a\nconservative 30% — about\none estimator'],
 ];
 worth.forEach(([n, label], i) => {
   const x = M + i * (W / 3);
@@ -580,17 +580,22 @@ worth.forEach(([n, label], i) => {
   });
 });
 
-card(s, M, 4.16, W, 1.15, 'FDF3E3');
+card(s, M, 4.16, W, 1.15, 'EAF6E6');
 s.addText(
-  'Those rates are placeholders. The three numbers that make this real are DCW’s own: blended cost per estimator-hour, average fee per cost plan, and the hours-per-estimate baseline — which is already a Q3 action item in the operating plan. Drop those in and the whole model recalculates.',
+  'One judgement left: that the Library removes 30% of report production. Everything else here is measured. The only missing number is a dollar rate — and the hours case stands without one.',
   { x: M + 0.35, y: 4.30, w: W - 0.7, h: 0.88, isTextBox: true, margin: 0,
     fontFace: TEXT, fontSize: 10.5, color: INK, lineSpacing: 15 }
 );
 s.addNotes(
-  'Say the placeholder line before anyone else spots it — it is the difference between a model and a ' +
-  'sales pitch. The spreadsheet behind this slide has every rate as an editable cell, so Pam can put ' +
-  'the real numbers in and we present actuals next time. Also worth noting: the 1,500 hours does not ' +
-  'depend on any rate at all — it is plans times hours. Only the dollar figure moves.'
+  'This slide changed completely once Rachel\'s time-tracking analysis landed. The hours used to be ' +
+  'my invention; they are now measured from 28,910 entries. Lead with that — this is DCW measuring ' +
+  'itself, not a vendor claim. ' +
+  'The 58.5% report-production figure is the one to dwell on: the bulk of a cost report is not ' +
+  'measuring the building, it is assembling the document. Takeoff is only 15.4% and we do not touch it. ' +
+  'If challenged on the 30%: it is the single remaining judgement, the sensitivity table runs 10-50%, ' +
+  'and even 10% clears the run cost many times over. ' +
+  'Be straight that the analysis itself carries caveats — coverage fell from 93% to 55%, the ' +
+  'calibration cohort is 2021-24, and its author recommends a six-week full-logging test to settle it.'
 );
 
 // ========================================================================
@@ -600,7 +605,7 @@ s = pres.addSlide();
 head(s, 'THE BUSINESS CASE', 'Three things we can do with an hour we get back');
 
 const levers = [
-  [GO, 'BANK IT', 'Same fee, fewer hours. On fixed-fee work every saved hour falls straight to margin — and margin is exactly what the operating plan is chasing: 67% expense ratio down to 62%.'],
+  [GO, 'BANK IT', 'Same fee, fewer hours. Each billable hour carries 1.38 paid hours, so 1,400 saved is nearly 2,000 off the firm — against a 67% expense ratio headed for 62%.'],
   [TEAL, 'REDEPLOY IT', 'Same team, more work. A thousand-odd hours is roughly one estimator we do not have to hire — in a year where one resignation moved 1,765 booked hours.'],
   [BLUE, 'SHARE IT', 'Cut the fee, win the job, and still make more per hour. This is the lever worth understanding properly — see below.'],
 ];
@@ -625,7 +630,7 @@ s.addText('Cut the fee by less than the hours fell, and margin goes up.', {
   fontFace: HEAD, fontSize: 14, bold: true, color: INK,
 });
 s.addText(
-  'The arithmetic is exact: if total hours on a job fall 8%, an 8% fee cut leaves margin percentage precisely where it was. Cut 2% instead and you have bought the work AND grown the margin. The gap between those two numbers is the whole business case — and it is a number we can only calculate once the hours baseline exists.',
+  'Measured, not assumed: 3.3 hours off an 18.9-hour report is a 17.5% drop. A 17.5% fee cut would leave margin percentage exactly where it is. Cut 5% and you have bought the work AND grown the margin — 45% to 53% on the job. That gap is the whole business case.',
   { x: M + 0.35, y: 4.36, w: W - 0.7, h: 0.85, isTextBox: true, margin: 0,
     fontFace: TEXT, fontSize: 10.5, color: BODY, lineSpacing: 15 }
 );
