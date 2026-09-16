@@ -76,7 +76,7 @@ data**, and it is not uniform across the app.
 | **Sign-in** (Microsoft / Entra ID) | **Real.** Working end to end on live accounts |
 | **Admin** — approve, revoke, roles | Renders; the writes do not persist yet |
 | **Wishlist** — file, vote, triage | **Real.** Writes to Supabase, genuinely persists |
-| **Add Documents** — upload a cost plan | **Real.** Files land in private storage (see §4 — one migration outstanding) |
+| **Add Documents** — upload a cost plan | **Real.** Files land in private storage and queue for the reader |
 | **How it works** — in-tool FAQ | Real, static content |
 | **Cost Library** — elements, ranges, verdicts | Screens real, **every figure invented** |
 | **Reader Queue** | Screens real, questions are fixtures |
@@ -106,17 +106,46 @@ it has what it needs.
 
 ---
 
-## Part 4 · Outstanding right now — check these first
+## Part 4 · Code deploys itself. Database changes do not.
 
-**[PR #6](https://github.com/DCW-Cost/dcwcost/pull/6) is open and unmerged.** It
-carries migration `003` plus the fix it goes with.
+**This is the single most confusable thing in the setup**, and it has already cost
+an evening. Hold on to it.
 
-**Migration `003` may not have been applied to Supabase.** Without it, uploading a
-document appears to succeed and then shows **"Upload incomplete"** — because
-`deliverables` has no UPDATE policy, and row-level security refuses writes
-*silently*, returning success with zero rows changed.
+| Change | How it reaches production |
+| --- | --- |
+| Code | Merge a PR → Netlify rebuilds → live in about two minutes |
+| **Database** | **You run the SQL by hand in Supabase, once. Nothing automates this** |
 
-To check, run this in Supabase → SQL Editor:
+Merging a PR puts a migration *file* in the repository. It does not execute it.
+Netlify deploys code; it never touches Supabase. So a merge can ship code that
+expects a column or a policy the database does not have yet — and the failure is
+usually silent rather than loud.
+
+**Migrations live in `docs/team-intranet/migrations/`, numbered, and are run in
+order.** All of `001`–`003` are applied to the live project as of 16 Sept 2026.
+If you add a new one, it is `004_…` and somebody runs it deliberately.
+
+> Automating this is possible — the Supabase CLI plus a GitHub Action, so a merge
+> runs new migrations itself. It is on the list, not yet built. It trades a human
+> gate on production data for convenience, which is worth doing on a quiet day
+> rather than mid-flight.
+
+### The failure mode to recognise
+
+**Row-level security does not raise an error when it refuses a write.** It filters
+the rows out first, so an UPDATE or DELETE that policy forbids returns *success
+with nothing changed*.
+
+That is how the upload broke: `deliverables` had no UPDATE policy, `confirm.ts`
+checked only for an error, and so the app reported "Stored" while the database had
+done nothing. The document then showed as "Upload incomplete" with no explanation
+anywhere.
+
+**Any write you add should count its affected rows** — `.select()` makes the
+result carry what actually changed, and zero rows means denied. Every write in
+`documents/confirm.ts` does this now; copy that shape.
+
+To see which policies a table has:
 
 ```sql
 select cmd, count(*) from pg_policies
@@ -124,14 +153,7 @@ select cmd, count(*) from pg_policies
  group by cmd order by cmd;
 ```
 
-You want to see **UPDATE** and **DELETE** in that list. If they are missing, run
-`docs/team-intranet/migrations/003_deliverable_writes.sql`.
-
-**That silent-denial behaviour is worth internalising** — it is the single most
-confusing failure mode in this stack. A policy that forbids a write does not
-error. It filters the row out first, so the write "succeeds" having done nothing.
-Every write in `documents/confirm.ts` now counts affected rows for exactly this
-reason, and any new write you add should too.
+Four rows — SELECT, INSERT, UPDATE, DELETE — is correct for `deliverables` today.
 
 ---
 
