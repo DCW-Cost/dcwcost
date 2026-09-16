@@ -117,7 +117,21 @@ export const POST: APIRoute = async ({ cookies, request }) => {
   if (signError || !signed) {
     // No usable URL means no upload will follow. Drop the row rather than
     // leave a deliverable that can never have a file.
-    await supabase.from('deliverables').delete().eq('id', row.id);
+    //
+    // Row-level security refuses a delete by filtering rather than erroring, so
+    // this can quietly remove nothing. Nothing downstream depends on it, but
+    // say so in the log rather than assume it worked.
+    const { data: removed } = await supabase
+      .from('deliverables')
+      .delete()
+      .eq('id', row.id)
+      .select('id');
+    if (!removed || removed.length === 0) {
+      console.warn(
+        `[intranet] could not roll back deliverable ${row.id} — the delete policy ` +
+          'is probably missing (migrations/003_deliverable_writes.sql).'
+      );
+    }
     const noBucket = /bucket.*not found/i.test(signError?.message ?? '');
     return bad(
       noBucket

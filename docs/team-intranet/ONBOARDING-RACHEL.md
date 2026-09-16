@@ -1,21 +1,42 @@
-# Getting set up to build
+# Handover — the DCW Cost Library
 
-Written for Rachel. The goal is that you can change this tool and ship the
-change yourself, without waiting on anyone.
+Written for Rachel, September 2026. Everything you need to work on this project
+alongside Lacie: what to get access to, how the pieces fit, what is genuinely
+built, and what is waiting.
 
-You already have the hard part — you know what the tool needs to do. The setup
-below is about ninety minutes, most of it waiting for installs.
-
-> **You do not need to learn to code first.** The way this was built is: describe
-> what you want in plain English, say you are not a developer, and ask for
-> step-by-step instructions. That is a legitimate way to work, not a shortcut —
-> and it is faster than reading the codebase front to back before touching it.
+You already have the hard part — you know what the tool needs to do. This is
+about removing the friction between that and shipping.
 
 ---
 
-## What connects to what
+## Part 1 · Access
 
-Worth thirty seconds, because it makes every error message afterwards legible:
+### Lacie has to grant these — you cannot self-serve
+
+| What | Why | How |
+| --- | --- | --- |
+| **Netlify** — site `dcwc` | Deploys, build logs, environment variables | Needs a **paid seat, $20/month**. Netlify → Team → Members → Invite |
+| **Supabase** — project `vsjxkokabstpvltcaxwu` | The database, sign-in, uploaded files | Supabase → Project Settings → Team → Invite |
+| **Intranet admin** | Approving accounts, triaging the wishlist | A row in `bootstrap_admins`, or Lacie promotes you from the Admin screen |
+
+### You set these up yourself
+
+| What | Notes |
+| --- | --- |
+| **Claude Code** | $20 Pro runs it with lower limits; $200 Max is what Lacie uses. Start on Pro and upgrade if you hit them |
+| **GitHub** | You already have access to `DCW-Cost/dcwcost` — confirm you can open it |
+| **Local clone** | Optional but worth it. See Part 5 |
+
+### Already sorted, nothing to do
+
+Entra ID app registration (DCW tenant), the domain gate, and your `@dcwcost.com`
+sign-in to the tool itself.
+
+---
+
+## Part 2 · How the pieces connect
+
+Thirty seconds here makes every later error message legible.
 
 ```
   You, prompting Claude Code
@@ -25,86 +46,115 @@ Worth thirty seconds, because it makes every error message afterwards legible:
   (the code)           (builds & hosts)     (the live site)
         │
         └─ reads ──►  Supabase
-                      (database, sign-in, uploaded files)
+                      (database · sign-in · uploaded files)
 ```
 
-You push code to **GitHub**. **Netlify** notices, rebuilds, and publishes.
-**Supabase** holds the data and handles sign-in. Claude Code does the pushing
-for you.
+You push code to **GitHub**. **Netlify** notices, rebuilds, publishes.
+**Supabase** holds the data and handles sign-in. Claude Code does the pushing.
 
-Two DCW websites exist and they are easy to confuse:
+**Two DCW websites exist and they are easy to confuse:**
 
 | | What it is | Runs the intranet? |
 | --- | --- | --- |
 | `dcwcost.com` | the site you built through Microsoft | **no** |
 | `dcwc.netlify.app` | this repo | **yes** |
 
-Moving the tool onto `dcwcost.com/teamintranet` later is a DNS change, not a
+Moving the tool to `dcwcost.com/teamintranet` later is a DNS change, not a
 rebuild. Nothing in the code assumes a domain.
 
----
-
-## Step 1 · Claude Code
-
-The $200/month Max plan is what Lacie is using. The $20 Pro plan also runs Claude
-Code with lower limits — worth starting there and upgrading if you hit them
-rather than paying for headroom you may not need.
-
-1. Sign up at [claude.ai](https://claude.ai)
-2. Install Claude Code: [code.claude.com/docs](https://code.claude.com/docs)
-3. Easiest start, no terminal: open [claude.ai/code](https://claude.ai/code) in a
-   browser, connect GitHub, and pick `DCW-Cost/dcwcost`. You can prompt from there
-   and it pushes for you.
+**The tool lives at** `https://dcwc.netlify.app/teamintranet/`
 
 ---
 
-## Step 2 · GitHub
+## Part 3 · What is actually built
 
-You already have access. Confirm you can see
-[github.com/DCW-Cost/dcwcost](https://github.com/DCW-Cost/dcwcost).
+Honest inventory. The distinction that matters is **real data vs demonstration
+data**, and it is not uniform across the app.
 
-In Claude Code, connect that repository. That is the whole setup — Claude Code
-commits and pushes; Netlify picks it up automatically.
+| Screen | State |
+| --- | --- |
+| **Sign-in** (Microsoft / Entra ID) | **Real.** Working end to end on live accounts |
+| **Admin** — approve, revoke, roles | Renders; the writes do not persist yet |
+| **Wishlist** — file, vote, triage | **Real.** Writes to Supabase, genuinely persists |
+| **Add Documents** — upload a cost plan | **Real.** Files land in private storage (see §4 — one migration outstanding) |
+| **How it works** — in-tool FAQ | Real, static content |
+| **Cost Library** — elements, ranges, verdicts | Screens real, **every figure invented** |
+| **Reader Queue** | Screens real, questions are fixtures |
+| **Estimate Builder** | Designed, not built. Button honestly disabled |
 
-**One rule that matters:** work on a branch, not `main`. Claude Code does this by
-default. `main` is what deploys.
+### Two things that are genuinely real and worth knowing
 
----
+**The statistics.** Outlier rejection (median absolute deviation on the log
+scale), the green/amber/red confidence gate, and the trend test all actually run
+and are covered by `npm test` — 23 tests. It is the *data* they run on that is
+invented, not the maths.
 
-## Step 3 · Netlify
+**The security model.** Three gates: Entra ID authenticates against the DCW
+tenant, the address must end `@dcwcost.com`, and an admin must approve the
+account. Profiles are created by a database trigger, never by the app, so nobody
+can insert themselves as an active admin.
 
-Needs a paid seat ($20/month) — **Lacie has to invite you**, you cannot self-serve
-this one. Team → Members → Invite.
+### The reader does not exist yet
 
-Once you are in, the two things you will actually use:
+This is the biggest gap and the thing most likely to be misunderstood. **Uploading
+a document stores it and queues it. Nothing reads it.** The three-pass reader is
+specified in detail in `PLAN.md` §6 — comprehend the document's conventions,
+extract line items, reconcile against the cover sheet — and none of it is written.
 
-- **Deploys** — every push shows here. Red means the build broke; click it and
-  read the log. The error is almost always in the last twenty lines.
-- **Site configuration → Environment variables** — API keys and settings. These
-  only take effect on a **new deploy**, which catches everyone once.
-
----
-
-## Step 4 · Supabase
-
-[supabase.com](https://supabase.com) → sign in with GitHub → project
-`vsjxkokabstpvltcaxwu`. Ask Lacie to add you if you cannot see it.
-
-- **Table Editor** — browse the data
-- **SQL Editor** — run queries and migrations
-- **Authentication → Users** — who has signed in
-- **Storage** — uploaded cost plans
-
-**One thing you must never do:** copy the `service_role` / secret key into the
-project. It bypasses every security policy in the database. The `anon` key is the
-one that belongs in the app, and it is safe in a browser precisely *because* those
-policies exist.
+An `ANTHROPIC_API_KEY` is already set in Netlify, so the moment that worker exists
+it has what it needs.
 
 ---
 
-## Step 5 · Run it on your own machine (optional, but worth it)
+## Part 4 · Outstanding right now — check these first
 
-Being able to try something without deploying makes you much faster.
+**[PR #6](https://github.com/DCW-Cost/dcwcost/pull/6) is open and unmerged.** It
+carries migration `003` plus the fix it goes with.
+
+**Migration `003` may not have been applied to Supabase.** Without it, uploading a
+document appears to succeed and then shows **"Upload incomplete"** — because
+`deliverables` has no UPDATE policy, and row-level security refuses writes
+*silently*, returning success with zero rows changed.
+
+To check, run this in Supabase → SQL Editor:
+
+```sql
+select cmd, count(*) from pg_policies
+ where schemaname = 'public' and tablename = 'deliverables'
+ group by cmd order by cmd;
+```
+
+You want to see **UPDATE** and **DELETE** in that list. If they are missing, run
+`docs/team-intranet/migrations/003_deliverable_writes.sql`.
+
+**That silent-denial behaviour is worth internalising** — it is the single most
+confusing failure mode in this stack. A policy that forbids a write does not
+error. It filters the row out first, so the write "succeeds" having done nothing.
+Every write in `documents/confirm.ts` now counts affected rows for exactly this
+reason, and any new write you add should too.
+
+---
+
+## Part 5 · Working on it
+
+### The loop
+
+**You prompt → Claude Code edits → commits → pushes → Netlify rebuilds → live.**
+
+That is the whole thing. No separate build step, no deploy command.
+
+Easiest start with no terminal: [claude.ai/code](https://claude.ai/code), connect
+GitHub, pick `DCW-Cost/dcwcost`, and prompt from there.
+
+**One rule:** work on a branch, not `main`. Claude Code does this by default.
+`main` is what deploys.
+
+> You do not need to learn to code first. The way this was built is: describe
+> what you want in plain English, say you are not a developer, and ask for
+> step-by-step instructions. That is a legitimate way to work — and faster than
+> reading the codebase front to back before touching it.
+
+### Running it on your own machine (optional, worth it)
 
 ```bash
 git clone https://github.com/DCW-Cost/dcwcost.git
@@ -113,7 +163,7 @@ npm install
 npm run dev          # http://localhost:4321
 ```
 
-Create a file called `.env` in that folder:
+Create `.env` in that folder:
 
 ```
 INTRANET_ENABLED=true
@@ -121,66 +171,131 @@ INTRANET_DATA=fixtures
 INTRANET_EMAIL_DOMAIN=dcwcost.com
 ```
 
-That is enough. **Leave the Supabase variables out** and it runs in demo mode with
-invented data and treats you as an admin — perfect for trying things, and the
-reason `INTRANET_ENABLED` exists so that mode can never reach a public URL.
+That is enough. **Leave the Supabase variables out** and it runs in demo mode
+with invented data and treats you as an admin — perfect for trying things, and
+the reason `INTRANET_ENABLED` exists so that mode can never reach a public URL.
 
 `.env` is gitignored. Never commit it.
 
+### Where things live
+
+```
+src/
+  middleware.ts                every /teamintranet request passes through here
+  lib/intranet/
+    gate.ts                    the INTRANET_ENABLED master switch
+    auth.ts                    Entra ID + session handling
+    stats.ts                   outlier rejection, confidence gate, trend
+    wishlist.ts                the wishlist (talks to Supabase directly)
+    documents.ts               uploads
+    data/types.ts              ← the DataProvider interface. The key seam
+    data/fixtures.ts           invented demo data
+  pages/teamintranet/          the screens
+docs/team-intranet/
+  PLAN.md                      the design, and why each decision was made
+  HANDOFF.md                   architecture orientation
+  ZEBEL-GAP.md                 capability roadmap from the Zebel evaluation
+  migrations/                  SQL applied to the live database, in order
+  deck/                        generators for the pilot deck and business model
+```
+
+### The one architectural idea to understand
+
+**Pages never touch the database directly.** Every screen imports `provider` from
+`src/lib/intranet/data/`. Swapping fixtures for real cost data means writing
+`data/supabase.ts` against the `DataProvider` interface in `types.ts` and setting
+`INTRANET_DATA=supabase`. No page changes.
+
+The wishlist deliberately bypasses that seam and talks to Supabase directly — the
+cost library has an excuse for being fake, a suggestion box does not.
+
 ---
 
-## Read these three, in this order
+## Part 6 · Good places to start
 
-1. [`HANDOFF.md`](HANDOFF.md) — what exists, and the three ideas worth
-   understanding before changing anything
-2. [`PLAN.md`](PLAN.md) — the design and *why* each decision was made. Long, but
-   it is where the reasoning lives
-3. [`ZEBEL-GAP.md`](ZEBEL-GAP.md) — what Zebel does that we do not, turned into a
-   roadmap
-
-Skip `schema.sql` until you need it. It is a reference, not a read-through.
-
----
-
-## Good first things to change
-
-Ordered by how hard they are to get wrong:
+Ordered by how hard they are to get wrong.
 
 1. **Wording.** Anything in `src/pages/teamintranet/` that reads awkwardly to an
    estimator. You are better placed than anyone to fix this. Zero risk.
 2. **The FAQ.** `src/pages/teamintranet/faq/index.astro` is a plain list of
    questions and answers. Add the ones the team actually asks you.
-3. **Wishlist triage.** You are an admin — file, prioritise, set target dates.
-   No code at all, and it is the thing that keeps the team engaged.
-4. **A real feature.** Pick the top-voted wishlist item and describe it to Claude
-   Code. Mention `src/lib/intranet/data/types.ts` — the `DataProvider` interface
-   there is the seam everything else hangs off.
+3. **Wishlist triage.** You are an admin — prioritise, set target dates, add
+   notes. No code at all, and it is what keeps the team engaged.
+4. **A real feature.** Take the top-voted wishlist item and describe it to Claude
+   Code. Mention `src/lib/intranet/data/types.ts`.
 
-## Two things to be careful with
+### The two biggest pieces of work, in order
 
-- **`netlify.toml`** — do not add a `from = "/*"` catch-all redirect. It breaks
-  the contact form. There is a comment in the file explaining why; it is not
-  decoration, the form was broken by exactly this once before.
-- **Anything in `docs/team-intranet/migrations/`** — SQL that has been run against
-  the live database. Never edit a migration that has already been applied; add a
-  new numbered one instead.
+**The extraction worker.** Turns a queued document into library rows. Everything
+else is waiting on it — the Cost Library cannot show real numbers until documents
+have been read. `PLAN.md` §6 specifies it.
+
+**The Airtable backfill.** The cost plans are attachments on Airtable records, so
+this is a scripted pull, not a person clicking 1,235 times. Needs
+`AIRTABLE_API_KEY` and `AIRTABLE_BASE_ID`. Worth doing **after** the reader is
+proven on a handful of real documents.
+
+`ZEBEL-GAP.md` has the capability roadmap beyond that, drawn from the May Zebel
+demo — per-line unit of measure, cross-project line comparison, comp toggles and
+overrides-with-notes are the four your own estimators asked for by name.
 
 ---
 
-## When something breaks
+## Part 7 · Things not to do
 
-It will, and almost none of it is dangerous. The database has real data now
-(accounts, the wishlist); the cost figures are still invented.
+- **Never put the Supabase `service_role` / secret key in this project.** It
+  bypasses every security policy in the database. The `anon` key is the one that
+  belongs in the app, and it is safe in a browser *because* those policies exist.
+- **Never grant admin through an environment variable.** Use `bootstrap_admins`,
+  so a leaked build config cannot grant it.
+- **Any new database view needs `security_invoker = true`.** Without it the view
+  runs with its owner's privileges and reads straight past row-level security.
+- **Do not add a `from = "/*"` catch-all to `netlify.toml`.** It breaks the
+  contact form. The comment there is not decoration — the form was broken by
+  exactly this once.
+- **Never edit a migration that has already been applied.** Add a new numbered
+  one instead.
 
-- **The site build fails** → Netlify → Deploys → click the red one → read the last
-  twenty lines. Paste them into Claude Code and ask what they mean.
-- **A page 404s** → `INTRANET_ENABLED` is not `true` on that deploy context, or the
-  build has not finished.
-- **"Invalid API key"** → the Supabase key is wrong or missing. Note that Supabase
-  now issues `sb_publishable_…` keys alongside the older `eyJ…` ones; either works,
-  but it must be the **anon/publishable** one, never the secret.
-- **A change did not appear** → environment variables need a fresh deploy, and the
-  browser may be caching. Hard refresh first.
+---
 
-When you are stuck, paste the actual error text rather than describing it. That
-is the single biggest difference between a fast answer and a slow one.
+## Part 8 · When something breaks
+
+It will, and almost none of it is dangerous. The database holds real accounts, the
+wishlist, and any uploaded documents; the cost figures are still invented.
+
+| Symptom | Almost always |
+| --- | --- |
+| Build fails | Netlify → Deploys → click the red one → read the last 20 lines. Paste them into Claude Code |
+| A page 404s | `INTRANET_ENABLED` is not `true` for that deploy context, or the build has not finished |
+| "Invalid API key" | Wrong Supabase key. Must be the **anon/publishable** one, never the secret |
+| A change did not appear | Environment variables need a **fresh deploy**. Saving alone does nothing |
+| A write "succeeds" but nothing changed | A missing row-level-security policy. See §4 |
+
+**Environment variables only take effect on a new build.** This catches everyone
+at least once.
+
+When stuck, paste the actual error text rather than describing it. That is the
+single biggest difference between a fast answer and a slow one.
+
+---
+
+## Part 9 · Worth knowing before a conversation about it
+
+**The numbers in the deck are now real.** Your own time-tracking analysis replaced
+the largest placeholder in the business model: a cost report takes **18.9 hours**,
+and **58.5% of that is report production** — nearly four times takeoff. That is
+the bucket this tool attacks, and it is measured rather than asserted.
+
+The one judgement left is that the Library removes 30% of report production →
+3.3 hours a report, ~1,400 hours a year, about one FTE.
+
+**What the tool does not do: 19 hours does not become 1.5.** Takeoff, QC, client
+time and revisions are 7.8 of those 19 hours and the Library touches none of
+them. If anyone quotes a figure like that, the arithmetic falls apart in front of
+an estimator in about four seconds.
+
+**Governance.** DCW's decision matrix puts a cost database as an internal
+practice with the CEO (#46), and as something DCW sells with the Board plus TSC
+veto (#47). The operating plan also currently parks AI plan reading as a
+next-year *buy from a specialist* — which this contradicts. Worth naming
+deliberately rather than drifting past.
