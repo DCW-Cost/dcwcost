@@ -114,6 +114,37 @@ export function createSupabaseProvider(
     return Array.isArray(data) ? (data as Row[]) : [];
   }
 
+  /**
+   * As `rows`, but pages through the whole result set.
+   *
+   * PostgREST caps an unbounded select at 1,000 rows and says nothing about it.
+   * For a statistics engine that is the worst possible failure: a pool silently
+   * missing its tail still produces a median, a confidence light and a trend,
+   * all of them wrong and none of them complaining. So paging is explicit, and
+   * hitting the ceiling is an error rather than a quiet truncation.
+   */
+  async function allRows(
+    operation: string,
+    build: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
+  ) {
+    const PAGE = 1000;
+    const MAX_ROWS = 200_000; // ~1,235 deliverables x 40-120 line items, with headroom.
+    const out: Row[] = [];
+
+    for (let from = 0; from < MAX_ROWS; from += PAGE) {
+      const { data, error } = await build(from, from + PAGE - 1);
+      if (error) throw new ProviderError(operation, error);
+      const page = Array.isArray(data) ? (data as Row[]) : [];
+      out.push(...page);
+      if (page.length < PAGE) return out;
+    }
+
+    throw new ProviderError(
+      operation,
+      `more than ${MAX_ROWS} rows matched; refusing to return a truncated pool`,
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Mappers. One per shape, so the column-name coupling lives in one place.
   // -------------------------------------------------------------------------
@@ -139,6 +170,9 @@ export function createSupabaseProvider(
     taxonomyCode: str(r.taxonomy_code),
     rawDescription: str(r.raw_description),
 
+    // These are numbers by contract, and the query below drops any row where
+    // the poolable figure is missing — so a null here never becomes a $0
+    // observation dragging a median down without appearing in the source list.
     unitCost: num(r.unit_cost),
     bareCostPerSf: num(r.bare_cost_per_project_sf),
     escalatedBareCostPerSf: num(r.escalated_bare_cost_per_project_sf),
@@ -294,7 +328,7 @@ export function createSupabaseProvider(
     },
 
     async getObservations(filters: LibraryFilters): Promise<Observation[]> {
-      const found = await rows('getObservations', () => {
+      const found = await allRows('getObservations', (from, to) => {
         let q = db
           .from('v_observations')
           .select('*')
@@ -308,7 +342,11 @@ export function createSupabaseProvider(
           .eq('is_latest_version', true)
           // A document whose markup basis the reader could not determine is held
           // out of the pool entirely (PLAN.md §5.4 and §7 step 1).
-          .neq('basis', 'undetermined');
+          .neq('basis', 'undetermined')
+          // A line with no poolable figure is not an observation. NIC, "included
+          // above" and unpriced scope all land here; counting them as zero would
+          // understate every statistic they touched.
+          .not('escalated_bare_cost_per_project_sf', 'is', null);
 
         // Estimate reviews are someone else's numbers. Mixing them into DCW's
         // own pricing history would poison every statistic downstream, so the
@@ -321,7 +359,7 @@ export function createSupabaseProvider(
         if (filters.minGrossSf != null) q = q.gte('project_gross_sf', filters.minGrossSf);
         if (filters.maxGrossSf != null) q = q.lte('project_gross_sf', filters.maxGrossSf);
 
-        return q.order('issue_date', { ascending: false });
+        return q.order('issue_date', { ascending: false }).range(from, to);
       });
 
       return found.map(toObservation);
@@ -341,6 +379,10 @@ export function createSupabaseProvider(
           .eq('state', 'open')
           // Blocking questions first: they hold a document out of the library,
           // where an assumption is usable while it waits (PLAN.md §6.4).
+          // Ascending is correct here — Postgres orders an enum by declaration
+          // order, and question_mode declares 'question' before 'assumption'.
+          // (Alphabetically it would be the other way round; verified against
+          // pg_enum rather than assumed.)
           .order('mode', { ascending: true })
           .order('created_at', { ascending: true }),
       );
