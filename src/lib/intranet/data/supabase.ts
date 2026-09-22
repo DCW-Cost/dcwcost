@@ -359,7 +359,14 @@ export function createSupabaseProvider(
         if (filters.minGrossSf != null) q = q.gte('project_gross_sf', filters.minGrossSf);
         if (filters.maxGrossSf != null) q = q.lte('project_gross_sf', filters.maxGrossSf);
 
-        return q.order('issue_date', { ascending: false }).range(from, to);
+        // Paging by position needs a total order. Every line in a document shares
+        // its issue date, so without a unique tiebreaker Postgres may order ties
+        // differently from one page request to the next — and rows at a page
+        // boundary would be duplicated or skipped without any error.
+        return q
+          .order('issue_date', { ascending: false })
+          .order('line_item_id', { ascending: true })
+          .range(from, to);
       });
 
       return found.map(toObservation);
