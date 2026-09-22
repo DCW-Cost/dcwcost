@@ -224,6 +224,14 @@ export function createSupabaseProvider(
     };
   };
 
+  /**
+   * KNOWN GAP, deliberately left as it was — see the note at the end of this
+   * file. A missing brief, and a brief whose gross_sf has not been read yet,
+   * both map to 0 GSF here. That is a real denominator problem and the honest
+   * fix changes `Estimate.brief` and `EstimateBrief.grossSf` to nullable in
+   * types.ts, which is a contract change affecting every page that divides by
+   * area. Not smuggled into this PR.
+   */
   const toEstimateBrief = (r: Row | null): EstimateBrief => {
     const b = r ?? {};
     // The four requirement kinds are stored as separate jsonb columns; the
@@ -339,6 +347,14 @@ export function createSupabaseProvider(
     },
 
     async getObservations(filters: LibraryFilters): Promise<Observation[]> {
+      // `like('taxonomy_code', '%')` matches every row in the archive, so an
+      // empty code would quietly return the whole library where the caller
+      // asked for one element — a pool nobody chose, with a confidence light
+      // on top of it. Refuse instead.
+      if (!filters.taxonomyCode) {
+        throw new ProviderError('getObservations', 'no taxonomy code given');
+      }
+
       const found = await allRows('getObservations', (from, to) => {
         let q = db
           .from('v_observations')
@@ -495,3 +511,25 @@ export function createSupabaseProvider(
     },
   };
 }
+
+/**
+ * Open items, recorded here rather than lost in a thread.
+ *
+ * 1. A missing brief, or a brief with no gross area yet, reads as 0 GSF.
+ *    `estimate_briefs` is a separate table with no trigger creating it, and the
+ *    `draft` and `reading_inputs` statuses both precede `brief_review` — so an
+ *    estimate normally has no brief while its inputs are being read. Zero is
+ *    the denominator for every $/GSF figure, so this needs fixing before the
+ *    Estimate Builder is used in anger. The fix is nullable `brief` and
+ *    nullable `grossSf` in types.ts, which makes the type-checker find every
+ *    page that divides without checking. That is a contract change and belongs
+ *    in its own PR.
+ *
+ * 2. The requirement mapper reads `{ text, cite }` from the jsonb requirement
+ *    columns. schema.sql documents them as `{ scope, source }`. Nothing has
+ *    written one yet, so neither shape is confirmed — settle it when the reader
+ *    is built, and make the writer and this reader agree.
+ *
+ * Both are harmless today: `estimates` is empty. Neither should survive to the
+ * point where an estimator sees a number.
+ */
