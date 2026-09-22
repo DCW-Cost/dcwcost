@@ -275,6 +275,8 @@ export function createSupabaseProvider(
 
   const toEstimateLine = (r: Row): EstimateLine => {
     const taxonomy = (r.taxonomy ?? {}) as Row;
+    const decidedBy = (r.decided_by_profile ?? {}) as Row;
+    const disposition = str(r.disposition) as LineDisposition;
     return {
       id: str(r.id),
       taxonomyCode: str(r.taxonomy_code),
@@ -285,14 +287,23 @@ export function createSupabaseProvider(
       suggestedRate: numOrNull(r.suggested_rate),
       suggestedReason: str(r.suggested_reason),
       sampleN: num(r.sample_n),
-      disposition: str(r.disposition) as LineDisposition,
+      disposition,
       finalRate: numOrNull(r.final_rate),
       excludedSource: strOrNull(r.excluded_source) ?? undefined,
-      blankReason: strOrNull(r.suggested_reason) ?? undefined,
+      // Only a deliberately blank line has a blank reason. Reusing
+      // suggested_reason for every line would put "why this is blank" on lines
+      // that carry a rate, which reads as a contradiction on the face of the
+      // estimate.
+      blankReason:
+        disposition === 'left_blank'
+          ? strOrNull(r.suggested_reason) ?? undefined
+          : undefined,
       // Per-line source observations are resolved from `sample_query` at display
       // time rather than stored on the line, so they are not populated here.
       observations: [],
-      attribution: strOrNull(r.decided_by) ?? undefined,
+      // The person who decided the line, by name. decided_by is a uuid; showing
+      // it raw would put an opaque id where a reviewer expects "Trish said so".
+      attribution: strOrNull(decidedBy.full_name) ?? undefined,
     };
   };
 
@@ -351,7 +362,14 @@ export function createSupabaseProvider(
         // Estimate reviews are someone else's numbers. Mixing them into DCW's
         // own pricing history would poison every statistic downstream, so the
         // default is DCW's own estimates only (PLAN.md §5.1).
-        q = q.in('deliverable_type', filters.deliverableTypes ?? ['cost_estimate']);
+        // `?? ` alone would let an explicitly empty array through, which reads
+        // as "no type filter" to a caller and returns nothing from PostgREST.
+        // Either way the estimate-reviews guard is lost, so length is what
+        // decides.
+        const types = filters.deliverableTypes?.length
+          ? filters.deliverableTypes
+          : (['cost_estimate'] as DeliverableType[]);
+        q = q.in('deliverable_type', types);
 
         if (filters.sectors?.length) q = q.in('sector', filters.sectors);
         if (filters.regions?.length) q = q.in('region', filters.regions);
@@ -359,10 +377,11 @@ export function createSupabaseProvider(
         if (filters.minGrossSf != null) q = q.gte('project_gross_sf', filters.minGrossSf);
         if (filters.maxGrossSf != null) q = q.lte('project_gross_sf', filters.maxGrossSf);
 
-        // Paging by position needs a total order. Every line in a document shares
-        // its issue date, so without a unique tiebreaker Postgres may order ties
-        // differently from one page request to the next — and rows at a page
-        // boundary would be duplicated or skipped without any error.
+        // The tiebreaker is not cosmetic. Paging by position requires a total
+        // order, and every line from one document shares an issue date — so
+        // with ties, Postgres may return them differently on each page request
+        // and a boundary falling inside a tie silently duplicates some rows and
+        // drops others. line_item_id is unique, which makes the order total.
         return q
           .order('issue_date', { ascending: false })
           .order('line_item_id', { ascending: true })
@@ -419,7 +438,8 @@ export function createSupabaseProvider(
              created_by_profile:profiles!estimates_created_by_fkey(full_name),
              estimate_briefs(*),
              estimate_inputs(filename, input_kind, read_status),
-             estimate_lines(*, taxonomy(title))`,
+             estimate_lines(*, taxonomy(title),
+                            decided_by_profile:profiles!estimate_lines_decided_by_fkey(full_name))`,
           )
           .eq('id', id)
           .limit(1),
