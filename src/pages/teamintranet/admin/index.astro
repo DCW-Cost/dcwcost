@@ -1,9 +1,83 @@
 ---
+/**
+ * Admin — who is waiting, who is in, and what they can do.
+ *
+ * The three controls here write to `profiles` through the signed-in person's
+ * own session, so `profiles_admin_write` is what actually decides whether they
+ * stick. Approving is an UPDATE of status: there is no INSERT policy on
+ * `profiles` on purpose, and the row is already there, put by the
+ * on_auth_user_created trigger when they first signed in.
+ *
+ * The listings below still come from fixtures through the `DataProvider` seam,
+ * which is read-only by design. The writes bypass it exactly as the wishlist
+ * does — see src/lib/intranet/profiles.ts.
+ */
 import IntranetLayout from '../../../layouts/IntranetLayout.astro';
 import { provider } from '../../../lib/intranet/data/index.ts';
 import { DEFAULT_RULES } from '../../../lib/intranet/stats.ts';
+import {
+  approveProfile,
+  declineProfile,
+  revokeProfile,
+  setRole,
+  ROLES,
+  ROLE_LABEL,
+} from '../../../lib/intranet/profiles.ts';
 
 export const prerender = false;
+
+/**
+ * Who is posting, according to the session — not according to the listing this
+ * page renders. Hiding a control is a courtesy; this is the enforcement, and
+ * the database's `is_admin()` is the enforcement behind that.
+ */
+const canWrite = Astro.locals.profile?.role === 'admin';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const id = String(form.get('id') ?? '');
+  // Left as null when the form did not carry one, so an approval with no role
+  // chosen is refused rather than quietly defaulting somebody to viewer.
+  const rawRole = form.get('role');
+  const role = rawRole === null ? null : String(rawRole);
+
+  let flash: { kind: 'ok' | 'bad'; text: string };
+
+  if (!canWrite) {
+    flash = { kind: 'bad', text: 'Only an admin can change who has access.' };
+  } else if (action === 'approve') {
+    const res = await approveProfile(Astro.cookies, Astro.request, { id, role });
+    flash = res.ok
+      ? { kind: 'ok', text: 'Approved. They can sign in now.' }
+      : { kind: 'bad', text: res.error ?? 'Could not approve that.' };
+  } else if (action === 'decline') {
+    const res = await declineProfile(Astro.cookies, Astro.request, id);
+    flash = res.ok
+      ? { kind: 'ok', text: 'Declined. Their request is closed.' }
+      : { kind: 'bad', text: res.error ?? 'Could not decline that.' };
+  } else if (action === 'revoke') {
+    const res = await revokeProfile(Astro.cookies, Astro.request, id);
+    flash = res.ok
+      ? { kind: 'ok', text: 'Access revoked. They are signed out on their next request.' }
+      : { kind: 'bad', text: res.error ?? 'Could not revoke that.' };
+  } else if (action === 'role') {
+    const res = await setRole(Astro.cookies, Astro.request, { id, role });
+    flash = res.ok
+      ? { kind: 'ok', text: 'Role changed.' }
+      : { kind: 'bad', text: res.error ?? 'Could not change that role.' };
+  } else {
+    flash = { kind: 'bad', text: 'That form did not say what it wanted to do.' };
+  }
+
+  // Redirect after post, so a refresh does not re-approve anybody. The flash
+  // rides in the query string rather than needing a session store.
+  const q = `?${new URLSearchParams({ [flash.kind]: flash.text })}`;
+  return Astro.redirect(`/teamintranet/admin/${q}`, 303);
+}
+
+const okMsg = Astro.url.searchParams.get('ok');
+const badMsg = Astro.url.searchParams.get('bad');
 
 const [pending, active, me] = await Promise.all([
   provider.getPendingProfiles(),
@@ -12,6 +86,12 @@ const [pending, active, me] = await Promise.all([
 ]);
 
 const admins = active.filter((p) => p.role === 'admin');
+
+/** Least privilege first, so the default on an unopened approval is Viewer. */
+const ROLE_CHOICES = [...ROLES].reverse();
+
+const SELECT_STYLE =
+  'font-size:.8rem;padding:.22rem .35rem;border:1px solid var(--line-2);border-radius:3px;background:var(--paper);color:var(--ink)';
 ---
 
 <IntranetLayout
@@ -28,6 +108,25 @@ const admins = active.filter((p) => p.role === 'admin');
         </div>
       ) : (
         <>
+          {okMsg && (
+            <div class="verdict-box green">
+              <span class="dot" />
+              <div>
+                <b>Done</b>
+                {okMsg}
+              </div>
+            </div>
+          )}
+          {badMsg && (
+            <div class="verdict-box red">
+              <span class="dot" />
+              <div>
+                <b>That did not work</b>
+                {badMsg}
+              </div>
+            </div>
+          )}
+
           <div class="card">
             <div class="card-head">
               <h3>Waiting for approval</h3>
@@ -64,19 +163,38 @@ const admins = active.filter((p) => p.role === 'admin');
                             : '—'}
                         </td>
                         <td>
+                          {/*
+                            The select sits in its own cell but belongs to the
+                            approve form — `form=` is what carries it there, so
+                            the table keeps its columns. Declining ignores it.
+                          */}
                           <select
+                            name="role"
+                            form={`approve-${p.id}`}
                             aria-label={`Role for ${p.fullName}`}
-                            style="font-size:.8rem;padding:.22rem .35rem;border:1px solid var(--line-2);border-radius:3px;background:var(--paper);color:var(--ink)"
+                            style={SELECT_STYLE}
                           >
-                            <option>Viewer</option>
-                            <option>Estimator</option>
-                            <option>Admin</option>
+                            {ROLE_CHOICES.map((r) => (
+                              <option value={r}>{ROLE_LABEL[r]}</option>
+                            ))}
                           </select>
                         </td>
                         <td class="r">
                           <span style="display:inline-flex;gap:.35rem">
-                            <button class="btn primary" type="button">Approve</button>
-                            <button class="btn" type="button">Decline</button>
+                            <form method="POST" id={`approve-${p.id}`}>
+                              <input type="hidden" name="action" value="approve" />
+                              <input type="hidden" name="id" value={p.id} />
+                              <button class="btn primary" type="submit">
+                                Approve
+                              </button>
+                            </form>
+                            <form method="POST">
+                              <input type="hidden" name="action" value="decline" />
+                              <input type="hidden" name="id" value={p.id} />
+                              <button class="btn" type="submit">
+                                Decline
+                              </button>
+                            </form>
                           </span>
                         </td>
                       </tr>
@@ -99,7 +217,7 @@ const admins = active.filter((p) => p.role === 'admin');
                 <thead>
                   <tr>
                     <th>Person</th>
-                    <th style="width:9rem">Role</th>
+                    <th style="width:12rem">Role</th>
                     <th style="width:12rem">Can answer questions</th>
                     <th class="r" style="width:8rem"></th>
                   </tr>
@@ -112,11 +230,34 @@ const admins = active.filter((p) => p.role === 'admin');
                         <span class="sub">{p.email}</span>
                       </td>
                       <td>
-                        <span
-                          class={`chip ${p.role === 'admin' ? 'green' : 'excluded'}`}
-                        >
-                          <span class="d" /> {p.role}
-                        </span>
+                        {/*
+                          Your own row stays a chip: no self-demote, so there is
+                          nothing here to offer. profiles.ts refuses it too.
+                        */}
+                        {p.id === me.id ? (
+                          <span class={`chip ${p.role === 'admin' ? 'green' : 'excluded'}`}>
+                            <span class="d" /> {p.role}
+                          </span>
+                        ) : (
+                          <form method="POST" style="display:inline-flex;gap:.35rem;align-items:center">
+                            <input type="hidden" name="action" value="role" />
+                            <input type="hidden" name="id" value={p.id} />
+                            <select
+                              name="role"
+                              aria-label={`Role for ${p.fullName}`}
+                              style={SELECT_STYLE}
+                            >
+                              {ROLE_CHOICES.map((r) => (
+                                <option value={r} selected={r === p.role}>
+                                  {ROLE_LABEL[r]}
+                                </option>
+                              ))}
+                            </select>
+                            <button class="btn" type="submit">
+                              Save
+                            </button>
+                          </form>
+                        )}
                       </td>
                       <td class="hint">
                         Yes{p.role === 'admin' ? ' · and promote to a rule' : ''}
@@ -125,7 +266,13 @@ const admins = active.filter((p) => p.role === 'admin');
                         {p.id === me.id ? (
                           <span class="hint">you</span>
                         ) : (
-                          <button class="btn" type="button">Revoke</button>
+                          <form method="POST">
+                            <input type="hidden" name="action" value="revoke" />
+                            <input type="hidden" name="id" value={p.id} />
+                            <button class="btn" type="submit">
+                              Revoke
+                            </button>
+                          </form>
                         )}
                       </td>
                     </tr>
