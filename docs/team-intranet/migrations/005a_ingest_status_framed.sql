@@ -1,0 +1,52 @@
+-- ============================================================================
+-- Migration 005a — a status for "framed, waiting for extraction"
+--
+-- Run it in Supabase → SQL Editor → New query → paste → Run.
+-- Expected result: "Success. No rows returned."
+--
+-- Then run 005b in a NEW query. Not in the same one — see below.
+--
+-- Requires 004.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Why this is its own file
+--
+-- Postgres will not let a new enum value be USED in the transaction that
+-- added it ("unsafe use of new value"), and the SQL editor runs one pasted
+-- script as one transaction. 005b rewrites two policies that name 'framed', so
+-- if this line and those policies were pasted together the whole script would
+-- fail and roll back. Splitting them is the difference between a migration
+-- that works and one that works only if you know the trick.
+--
+-- Why the status exists
+--
+-- Pass one of the reader ends with a frame written and nothing extracted yet.
+-- Without a status for that, the document either stays in `framing` for ever —
+-- which reads as "still working" and would trip any check for stuck work — or
+-- claims a later state it has not reached. `framed` is honest: understood, not
+-- yet extracted.
+--
+-- It sits after `framing` in the enum's order, so anything that sorts or
+-- compares by status sees the pipeline in the order it actually runs.
+--
+-- IRREVERSIBLE in practice. Postgres cannot drop a value from an enum; undoing
+-- this means rebuilding the type. That is acceptable here because the value
+-- names a real state the pipeline will always have.
+-- ----------------------------------------------------------------------------
+
+alter type ingest_status add value if not exists 'framed' after 'framing';
+
+-- ============================================================================
+-- Verification — run in a NEW query. Expected:
+--
+--   item                 value
+--   -------------------  -----------------------------------------------
+--   ingest_status order  pending, downloading, framing, framed, extracting,
+--                        reconciling, needs_answer, accepted, failed, skipped
+-- ============================================================================
+--
+-- select 'ingest_status order' as item,
+--        string_agg(enumlabel, ', ' order by enumsortorder) as value
+--   from pg_enum
+--  where enumtypid = 'public.ingest_status'::regtype;

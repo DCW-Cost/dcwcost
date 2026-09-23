@@ -13,10 +13,17 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@astrojs/netlify": "^6.6.5",
     "@astrojs/sitemap": "^3.7.3",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.116.0",
-    "astro": "^5.1.1"
+    "astro": "^5.1.1",
+    "pg": "^8.23.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^6.0.0",
+    "@types/pg": "^8.23.1"
   }
 }
