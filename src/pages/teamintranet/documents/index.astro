@@ -175,7 +175,8 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
           </li>
           <li>
             <b>Then it pulls the line items.</b> Every figure keeps the page and cell it came
-            from, so you can always click back to the source.
+            from, so you can always click back to the source. <i>Not built yet:</i> for now a
+            document stops once it is framed, and shows as "Framed — waiting for extraction".
           </li>
           <li>
             <b>Then it checks its own arithmetic.</b> The extracted lines are added up and
@@ -243,9 +244,22 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
                     <td>{d.uploadedAt ? formatDate(d.uploadedAt) : '—'}</td>
                     <td>
                       {d.hasFile ? (
-                        <span class={`chip ${STATUS_TONE[d.status]}`}>
-                          {STATUS_LABEL[d.status]}
-                        </span>
+                        <>
+                          <span class={`chip ${STATUS_TONE[d.status]}`}>
+                            {STATUS_LABEL[d.status]}
+                          </span>
+                          {d.status === 'framed' && (
+                            <span class="sub">Pass two (line items) is not built yet.</span>
+                          )}
+                          {(d.status === 'pending' || d.status === 'failed' || d.status === 'framed') && (
+                            <form method="POST" action="/teamintranet/documents/read" class="readnow">
+                              <input type="hidden" name="deliverable_id" value={d.id} />
+                              <button class="btn" type="submit">
+                                {d.status === 'failed' ? 'Try again' : d.status === 'framed' ? 'Read again' : 'Read now'}
+                              </button>
+                            </form>
+                          )}
+                        </>
                       ) : (
                         <span class="chip red" title="Registered, but the file never arrived">
                           Upload incomplete
@@ -364,6 +378,8 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
 
 
 <style>
+  .readnow { display: inline-block; margin-left: 0.4rem; }
+  .readnow .btn { padding: 0.15rem 0.55rem; font-size: 0.78rem; }
   .vbox {
     display: flex;
     gap: 0.75rem;

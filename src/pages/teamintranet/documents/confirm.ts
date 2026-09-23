@@ -24,6 +24,7 @@
 import type { APIRoute } from 'astro';
 import { serverClient } from '../../../lib/intranet/auth.ts';
 import { BUCKET } from '../../../lib/intranet/documents.ts';
+import { startReader } from '../../../lib/intranet/reader-trigger.ts';
 
 export const prerender = false;
 
@@ -83,5 +84,11 @@ export const POST: APIRoute = async ({ cookies, request }) => {
   // error raised, nothing written. Never report that as stored.
   if (!data || data.length === 0) return json({ error: DENIED }, 403);
 
-  return json({ ok: true });
+  // The file is real now, so hand it to the reader. A trigger that fails does
+  // not fail the upload: the document is stored and stays `pending`, the
+  // sweeper flags it, and "Read now" on the documents page retries it.
+  const reader = await startReader(supabase, request, id, `${BUCKET}/${path}`);
+  if (!reader.ok) console.warn(`[intranet] reader not started for ${id}: ${reader.error}`);
+
+  return json({ ok: true, readerStarted: reader.ok });
 };

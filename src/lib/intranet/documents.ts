@@ -16,11 +16,13 @@
  */
 import type { AstroCookies } from 'astro';
 import { serverClient, authConfigured } from './auth.ts';
+import { startReader } from './reader-trigger.ts';
 
 export type IngestStatus =
   | 'pending'
   | 'downloading'
   | 'framing'
+  | 'framed'
   | 'extracting'
   | 'reconciling'
   | 'needs_answer'
@@ -50,6 +52,7 @@ export const STATUS_LABEL: Record<IngestStatus, string> = {
   pending: 'Waiting to be read',
   downloading: 'Fetching',
   framing: 'Working out the conventions',
+  framed: 'Framed — waiting for extraction',
   extracting: 'Pulling line items',
   reconciling: 'Checking the totals',
   needs_answer: 'Needs an answer from you',
@@ -62,6 +65,8 @@ export const STATUS_TONE: Record<IngestStatus, 'green' | 'amber' | 'red' | 'excl
   pending: 'excluded',
   downloading: 'amber',
   framing: 'amber',
+  // Not working, and not finished: waiting on pass two, which is not built.
+  framed: 'excluded',
   extracting: 'amber',
   reconciling: 'amber',
   needs_answer: 'amber',
@@ -265,6 +270,11 @@ export async function uploadDocument(
     .eq('id', row.id);
 
   if (pathError) return { ok: false, error: pathError.message };
+
+  // Same as /documents/confirm: start the reader, and never fail the upload
+  // because the reader did not start.
+  const reader = await startReader(supabase, request, String(row.id), `${BUCKET}/${key}`);
+  if (!reader.ok) console.warn(`[intranet] reader not started for ${row.id}: ${reader.error}`);
   return { ok: true };
 }
 
