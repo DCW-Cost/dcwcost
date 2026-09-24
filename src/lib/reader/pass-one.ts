@@ -176,7 +176,7 @@ export async function runPassOne(input: PassOneInput): Promise<PassOneOutcome> {
           `type ${f.deliverable_type} (was ${ctx.recordedType}; ${f.deliverable_type_confidence})`,
         `questions: ${written.filed.filed} filed, ${written.filed.kept} still stand, ${written.filed.withdrawn} withdrawn; ` +
           `open assumptions ${written.hasOpen ? 'yes' : 'none'}`,
-        `model ${result.model}, ${result.toolCalls} tool calls; tokens in ${result.usage.input} + cache read ` +
+        `${READER_VERSION}, model ${result.model}, ${result.toolCalls} tool calls; tokens in ${result.usage.input} + cache read ` +
           `${result.usage.cacheRead} + cache write ${result.usage.cacheWrite}, out ${result.usage.output}; est. $${cost}`,
       ]);
       await closeRun(db, runId!, {

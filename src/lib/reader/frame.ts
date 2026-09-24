@@ -16,7 +16,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Workbook } from './workbook.ts';
 import { buildDigest, searchWorkbook, readRange } from './workbook.ts';
 
-export const READER_VERSION = 'pass1-frame/0.2.0';
+/**
+ * Recorded on every frame. Bump it on any change that could move a frame or its
+ * cost, so runs before and after can be told apart when comparing a document set.
+ *   0.2.0  first production version
+ *   0.2.1  conversation tail cached (cost only; prompts and tools unchanged)
+ */
+export const READER_VERSION = 'pass1-frame/0.2.1';
 
 /** PLAN §6.8: judgment passes on Opus 5. */
 export const FRAMING_MODEL = 'claude-opus-5';
@@ -561,6 +567,13 @@ export async function runFramePass(
         // model actually answered.
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default',
+        // Cache the growing conversation too, not just the fixed parts. Every
+        // lookup's result is re-sent on each later turn; without this those
+        // repeats were billed at full price every time — on the first two real
+        // runs, 54k–156k tokens per document. The two explicit breakpoints
+        // below (system prompt, digest) stay as guaranteed read points; this
+        // one moves forward with the conversation. Three of the four allowed.
+        cache_control: { type: 'ephemeral' },
         system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
         tools: TOOLS as Anthropic.Beta.BetaTool[],
         tool_choice: { type: 'auto' },
