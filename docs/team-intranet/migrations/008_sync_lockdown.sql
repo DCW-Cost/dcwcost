@@ -207,9 +207,9 @@ grant update (deliverable_id, person_id, synced_at) on deliverable_assignees to 
 --   sweep acl                   postgres=X/postgres, airtable_sync=X/postgres
 --   definer fns anon can run    guard_wishlist_triage, handle_new_auth_user,
 --                               is_active_user, is_admin
---   is_active locked, 16 tables true
---   missing_since locked, 16    true
---   synced_at writable, 16      true
+--   is_active locked (14)       true
+--   missing_since locked (14)   true
+--   synced_at writable (16)     true
 --   sync can still update       true
 --   sync CANNOT delete anywhere true
 --   sync relations              19, unchanged
@@ -222,12 +222,18 @@ grant update (deliverable_id, person_id, synced_at) on deliverable_assignees to 
 -- nobody intended.
 -- ============================================================================
 --
--- with mirror(t) as (values
+-- -- Two lists, not one. has_column_privilege() RAISES on a column that does
+-- -- not exist, so the flag checks cover only the 14 tables that carry
+-- -- is_active. The two join tables have no such column — see "What this
+-- -- migration does not do" — and including them turned the whole block into
+-- -- an error rather than a result.
+-- with has_flag(t) as (values
 --   ('people'),('client_companies'),('subconsultants'),('contacts'),('pursuits'),
 --   ('project_notes'),('time_entries'),('activity_log'),('bid_results'),
 --   ('out_of_office'),('subconsultant_tasks'),('subconsultant_invoices'),
---   ('deliverable_subconsultants'),('deliverable_assignees'),
---   ('projects'),('deliverables'))
+--   ('projects'),('deliverables')),
+-- all16(t) as (select t from has_flag
+--              union all values ('deliverable_subconsultants'),('deliverable_assignees'))
 -- select 'sweep: sync only' as item,
 --        has_function_privilege('airtable_sync','sweep_missing_from_airtable(uuid)','EXECUTE')::text as value
 -- union all select 'sweep: anon denied',
@@ -246,13 +252,13 @@ grant update (deliverable_id, person_id, synced_at) on deliverable_assignees to 
 --                     and has_function_privilege('anon', p.oid,'EXECUTE')),'none')
 -- union all select 'is_active locked, 16 tables',
 --        (select bool_and(not has_column_privilege('airtable_sync', t, 'is_active','UPDATE'))
---           from mirror)::text
+--           from has_flag)::text
 -- union all select 'missing_since locked, 16',
 --        (select bool_and(not has_column_privilege('airtable_sync', t,
---                         'missing_from_airtable_since','UPDATE')) from mirror)::text
+--                         'missing_from_airtable_since','UPDATE')) from has_flag)::text
 -- union all select 'synced_at writable, 16',
 --        (select bool_and(has_column_privilege('airtable_sync', t, 'synced_at','UPDATE'))
---           from mirror)::text
+--           from all16)::text
 -- union all select 'sync can still update',
 --        (has_column_privilege('airtable_sync','public.people','title','UPDATE')
 --     and has_column_privilege('airtable_sync','public.time_entries','duration','UPDATE')
