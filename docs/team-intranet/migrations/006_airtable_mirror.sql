@@ -823,12 +823,22 @@ create index if not exists deliverable_assignees_person_idx
 -- and leaving a stale completed_at behind would quietly poison anything that
 -- counts throughput or drives the cost library.
 --
--- THE MATCHED STRING IS A GUESS UNTIL THE SYNC CONFIRMS IT. Airtable holds
--- free text and this migration cannot see the base. `completed_value` below is
--- the single place to correct it; the comparison is lower(trim(...)) so
--- casing and stray spaces do not matter. If Phase II's terminal value turns
--- out to be "Complete - Invoiced" or similar, change the constant, re-run this
--- migration, and backfill with:
+-- THE MATCHED STRING WAS CONFIRMED AGAINST THE BASE on 2026-09-29. Phase II is
+-- a single select on `DCW Project Tasks`, and its terminal choice is exactly
+-- "Complete". It is the only terminal value in the list — the others are
+-- Docs Received (unassigned, then assigned), Special Projects, Report /
+-- Takeoff Development, Quality Control, Draft Delivered, Needs Revision
+-- (schedule TBD, then confirmed) and Pending Final Response — so there is no
+-- second finished state for this to miss.
+--
+-- The revision states sit after Draft Delivered, so a task marked complete
+-- that then needs a revision moves backwards through this field, which is
+-- what clears the timestamp.
+--
+-- `completed_value` below remains the single place to change it if the choice
+-- is ever renamed in Airtable; the comparison is lower(trim(...)) so casing
+-- and stray spaces do not matter. After any such change, re-run this
+-- migration and backfill with:
 --
 --   update deliverables set phase_ii_workflow = phase_ii_workflow;
 --
@@ -1232,18 +1242,22 @@ grant select (
 -- 1. RUN THE VERIFICATION BLOCK. The three rows to read first are
 --    "reader CANNOT read hourly", "portal CANNOT read profit" and
 --    "reader relations". If any of them is wrong, stop: the point of this
---    migration was that adding sixty columns to `deliverables` must not widen
+--    migration was that adding 63 columns to `deliverables` must not widen
 --    anything, and a false there means it did.
 --
--- 2. CONFIRM THE PHASE II COMPLETE STRING. §7 matches the literal 'complete'
---    because this migration cannot see the Airtable base. Check what Phase II
---    actually holds at its terminal step, and if it is anything else, change
---    the constant in set_deliverable_completed_at(), re-run this file, then:
+-- 2. PHASE II IS CONFIRMED, so there is nothing to do here — but know where
+--    the assumption lives. §7 matches the literal 'complete', checked against
+--    the base on 2026-09-29: Phase II is a single select on DCW Project Tasks
+--    and "Complete" is its only terminal choice.
+--
+--    If that choice is ever renamed in Airtable, the sync will keep loading
+--    the new text and completed_at will silently stop being set — no error,
+--    just a column that stops filling. Change the constant in
+--    set_deliverable_completed_at(), re-run this file, then:
 --
 --        update deliverables set phase_ii_workflow = phase_ii_workflow;
 --
 --    which re-fires the trigger over existing rows without changing data.
---    Until that is confirmed, completed_at will stay null.
 --
 -- 3. REGENERATE schema.sql. It is already out of date — it does not show
 --    `deliverables.source`, `storage_path`, `original_filename`, `uploaded_by`,
