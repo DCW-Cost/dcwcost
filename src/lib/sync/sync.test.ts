@@ -228,6 +228,18 @@ test('a multiple select feeding a text column reports the values it drops', () =
   assert.equal(coerce('text', ['Healthcare']).problem, undefined, 'one value is not a loss');
 });
 
+test('a genuinely multi-valued select is not squeezed into a single column', () => {
+  // Secondary Category carries 2+ values on 66 of 100 sampled projects,
+  // often four to eight. sector (7%) and city (2%) accept the loss and log
+  // it; market would have discarded real data on two thirds of projects,
+  // which is a different thing.
+  assert.ok(
+    !spec('projects').fields.some((f) => f.to === 'market'),
+    'market is a single text column; Secondary Category needs a text[] of its own'
+  );
+  assert.ok(spec('projects').fields.some((f) => f.to === 'sector'), 'sector is still carried');
+});
+
 test('the bucket fields Airtable calls dates are not mapped as dates', () => {
   // "Construction Start Date" is a single select of months ("May-21"), and
   // the task-level completion one is bare years ("2018"). Both would parse

@@ -183,10 +183,29 @@ export const TABLES: readonly TableSpec[] = [
       // coercion reports every time it drops one, so the loss is counted in
       // sync_anomalies rather than invisible.
       { from: 'Primary Category', to: 'sector', kind: 'text' },
-      { from: 'Secondary Category', to: 'market', kind: 'text' },
+      // Secondary Category is NOT MAPPED.
+      //
+      // `market` is a single text column and Airtable's Secondary Category is
+      // a multiple select that is genuinely multi-valued: in a sample of 100
+      // projects, 66 carried two or more, frequently four to eight
+      // ("Port", "Government / Essential Facilities", "Emergency /
+      // Operations", "Offices / Administrative" on one record). Keeping the
+      // first would discard real data on two thirds of projects, which is a
+      // different thing from the rare loss sector and city accept below.
+      //
+      // Needs a text[] column of its own before it can be carried. Left out
+      // rather than half-carried, because a `market` that silently holds one
+      // of six categories is worse than a `market` that is empty: the first
+      // looks like an answer.
       { from: 'Location (City, State)', to: 'city', kind: 'text' },
       { from: 'Delivery Method', to: 'delivery_method', kind: 'text' },
       // Construction Start Date is NOT MAPPED, and that is deliberate.
+      //
+      // Two reasons, and the second is the stronger one.
+      //
+      // FIRST, it is not a date. Airtable types it as a single select whose
+      // choices are month buckets — "May-21", "Jun-21", one stray "Q1 2023" —
+      // and it is populated on 3 of 1,877 projects.
       //
       // Airtable types it as a single select whose choices are month buckets —
       // "May-21", "Jun-21", … and one stray "Q1 2023". It is not a date and
@@ -195,10 +214,17 @@ export const TABLES: readonly TableSpec[] = [
       // new Date("May-21") yields a real-looking day that is simply wrong.
       // "2018" would land as 2018-01-01 and read later as the first of January.
       //
-      // Needs a decision before it can be carried: a text column holding the
-      // bucket as written, or a date column holding the first of the month
-      // with the precision loss recorded somewhere. Not a choice to make
-      // inside a sync.
+      // SECOND, and this is why it stays out rather than waiting for a column:
+      // construction start is the ESCALATION TARGET — what a rate is escalated
+      // TO. The reader already extracts it from the document with evidence and
+      // confidence (Evergreen to April 2026, Oregon Zoo to Q1 2028, both read
+      // from the workbook). That is squarely "what the estimate was priced
+      // against", which is the document's side of the line, not Airtable's.
+      //
+      // Carrying a coarse month bucket populated three times would put a worse
+      // source in competition with a better one. This is recorded here so that
+      // whoever finds the gap in six months reads a decision rather than an
+      // oversight.
       { from: 'Secured Project Status', to: 'project_status', kind: 'text' },
       { from: 'Contract Amount', to: 'contract_amount', kind: 'numeric' },
       { from: 'Estimated Cost - Building', to: 'estimated_cost_building', kind: 'numeric' },
