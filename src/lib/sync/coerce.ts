@@ -71,11 +71,21 @@ export function coerce(kind: Kind, raw: unknown): Coerced {
 
   switch (kind) {
     case 'text': {
+      const many = Array.isArray(raw) && raw.length > 1;
       const one = Array.isArray(raw) ? raw[0] : raw;
       const name = selectName(one);
-      if (name !== null) return ok(name.trim());
-      if (typeof one === 'number' || typeof one === 'boolean') return ok(String(one));
-      return bad(`expected text, got ${describe(raw)}`);
+      const value = name !== null ? name.trim()
+        : typeof one === 'number' || typeof one === 'boolean' ? String(one)
+        : null;
+      if (value === null) return bad(`expected text, got ${describe(raw)}`);
+      // A multiple select feeding a single text column. Keeping the first is
+      // the only thing a text column can do, but doing it silently is how a
+      // project quietly loses its second category. Say so every time.
+      if (many) {
+        const all = (raw as unknown[]).map(selectName).filter(Boolean).join(' | ');
+        return { value, problem: `${(raw as unknown[]).length} values (${all}); kept the first` };
+      }
+      return ok(value);
     }
 
     case 'text[]': {

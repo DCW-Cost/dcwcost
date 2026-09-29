@@ -178,11 +178,27 @@ export const TABLES: readonly TableSpec[] = [
       { from: 'Project Title', to: 'name', kind: 'text' },
       { from: 'Link to Client Company (Add Here)', to: 'client_id', kind: 'link', linkTo: 'client_companies' },
       { from: 'Client Contact (Linked)', to: 'client_contact_id', kind: 'link', linkTo: 'contacts' },
+      // sector, market and city are single `text` columns fed from Airtable
+      // MULTIPLE selects. Keeping the first is all a text column can do; the
+      // coercion reports every time it drops one, so the loss is counted in
+      // sync_anomalies rather than invisible.
       { from: 'Primary Category', to: 'sector', kind: 'text' },
       { from: 'Secondary Category', to: 'market', kind: 'text' },
       { from: 'Location (City, State)', to: 'city', kind: 'text' },
       { from: 'Delivery Method', to: 'delivery_method', kind: 'text' },
-      { from: 'Construction Start Date', to: 'construction_start', kind: 'date' },
+      // Construction Start Date is NOT MAPPED, and that is deliberate.
+      //
+      // Airtable types it as a single select whose choices are month buckets —
+      // "May-21", "Jun-21", … and one stray "Q1 2023". It is not a date and
+      // never was. `construction_start` is a Postgres `date`, so writing this
+      // into it would assert a precision the source does not have, and
+      // new Date("May-21") yields a real-looking day that is simply wrong.
+      // "2018" would land as 2018-01-01 and read later as the first of January.
+      //
+      // Needs a decision before it can be carried: a text column holding the
+      // bucket as written, or a date column holding the first of the month
+      // with the precision loss recorded somewhere. Not a choice to make
+      // inside a sync.
       { from: 'Secured Project Status', to: 'project_status', kind: 'text' },
       { from: 'Contract Amount', to: 'contract_amount', kind: 'numeric' },
       { from: 'Estimated Cost - Building', to: 'estimated_cost_building', kind: 'numeric' },
@@ -273,8 +289,12 @@ export const TABLES: readonly TableSpec[] = [
       { from: '*Budget', to: 'budget', kind: 'numeric' },
       { from: '*Building SF', to: 'building_sf', kind: 'numeric' },
       { from: '*Sitework SF', to: 'sitework_sf', kind: 'numeric' },
-      { from: '*Construction Start Date', to: 'construction_start', kind: 'date' },
-      { from: '*Construction Completion Date', to: 'construction_completion', kind: 'date' },
+      // *Construction Start Date and *Construction Completion Date are NOT
+      // MAPPED, for the same reason as their project-level twins: both are
+      // single selects of buckets, not dates. Start is "May-21" style months;
+      // Completion is bare YEARS — "2018", "2019", "2020", "2021", "2022".
+      // A year in a `date` column becomes the first of January, which is a
+      // fact nobody stated. See the note on projects.
       { from: '*Delivery Method', to: 'delivery_method', kind: 'text' },
       { from: '*New, Reno, Demo, Etc', to: 'new_reno_demo_etc', kind: 'text[]' },
       { from: '*Project Size', to: 'project_size', kind: 'text[]' },

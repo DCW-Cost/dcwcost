@@ -217,3 +217,27 @@ test('an unexpected Phase II value is raised as an issue and still loads', () =>
   assert.ok(issue, 'a renamed choice must surface');
   assert.equal(plan.values[plan.columns.indexOf('phase_ii_workflow')], 'Complete - Invoiced');
 });
+
+test('a multiple select feeding a text column reports the values it drops', () => {
+  // sector, market and city are single text columns fed from Airtable
+  // multiple selects. Keeping the first is all a text column can do; doing it
+  // silently is how a project loses its second category without trace.
+  const got = coerce('text', ['Healthcare', 'Civic']);
+  assert.equal(got.value, 'Healthcare');
+  assert.match(got.problem ?? '', /2 values.*Healthcare \| Civic.*kept the first/);
+  assert.equal(coerce('text', ['Healthcare']).problem, undefined, 'one value is not a loss');
+});
+
+test('the bucket fields Airtable calls dates are not mapped as dates', () => {
+  // "Construction Start Date" is a single select of months ("May-21"), and
+  // the task-level completion one is bare years ("2018"). Both would parse
+  // into a confident, wrong date. Neither is carried until it has a home.
+  for (const key of ['projects', 'deliverables'] as const) {
+    for (const f of spec(key).fields) {
+      assert.ok(
+        !f.to.startsWith('construction_'),
+        `${key}.${f.to} is mapped; those Airtable fields are buckets, not dates`
+      );
+    }
+  }
+});
