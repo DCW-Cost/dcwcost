@@ -74,9 +74,39 @@
 -- here, before anything loads.
 -- ============================================================================
 
-alter table deliverables
-  alter column task_number type text[]
-  using case when task_number is null then null else array[task_number] end;
+-- GUARDED ON THE COLUMN'S CURRENT TYPE, NOT ON ITS CONTENTS, and the
+-- difference is the whole point.
+--
+-- The obvious way to write this — a bare ALTER with
+-- `using case when task_number is null then null else array[task_number] end`
+-- — is idempotent-looking and silently wrong. On a second run the column is
+-- already text[], and `array[task_number]` wraps what is there rather than
+-- converting it, producing a two-dimensional array:
+--
+--     before   {"Task 3a",On-Call}
+--     after    {{"Task 3a",On-Call}}     array_ndims = 2
+--
+-- No error. Harmless while the column is empty, and silent corruption of
+-- every task number once the sync has loaded 5,551 of them — which is exactly
+-- the class of failure this migration exists to prevent, arriving inside the
+-- migration itself.
+--
+-- A null check would not have caught it either: the rows that break are the
+-- populated ones.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name   = 'deliverables'
+       and column_name  = 'task_number'
+       and data_type   <> 'ARRAY')
+  then
+    alter table deliverables
+      alter column task_number type text[]
+      using case when task_number is null then null else array[task_number] end;
+  end if;
+end $$;
 
 comment on column deliverables.task_number is
   'Airtable Task Number, a multipleSelects. Genuinely multi-valued — a task can be both "Task 3a" and "On-Call".';
@@ -112,7 +142,23 @@ alter table pursuits drop column if exists date_created;
 -- will ever be.
 -- ============================================================================
 
-alter table projects rename column invoice_due_by to invoice_instructions;
+-- ALTER TABLE ... RENAME COLUMN has no IF EXISTS, so an unguarded rename
+-- aborts the whole migration on a second run — and because this sits at §3,
+-- everything after it (sync_runs, the sweep, both estimator columns) would
+-- silently not apply. The error names only the rename; the eight sections it
+-- took down with it are invisible.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'projects'
+                and column_name = 'invoice_due_by')
+     and not exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'projects'
+                and column_name = 'invoice_instructions')
+  then
+    alter table projects rename column invoice_due_by to invoice_instructions;
+  end if;
+end $$;
 
 comment on column projects.invoice_instructions is
   'Free text, project-specific billing instructions. Airtable calls this "Invoice Due By"; it has never held a date. 6 of 1,877 projects have one.';
