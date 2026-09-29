@@ -144,13 +144,35 @@ comment on column deliverables.construction_start is
 --   sync can still write compl.  true
 --   reader can still read market true
 --   sync still cannot set active true
---   anon gained nothing          none
+--   anon on projects/deliverables SELECT (unchanged, see below)
 --
 -- The last two are the standing rule from 008: a migration is not done until
 -- what anon, authenticated and service_role can do with everything it touched
 -- has been read back out of the catalog. This migration creates no objects, so
 -- the answer should be that nothing changed — and "should be" is exactly why
 -- the rule exists.
+--
+-- ON THE LAST ROW, WHICH DOES NOT SAY 'none' AND SHOULD NOT.
+--
+-- `anon` holds table-level SELECT on `projects` and `deliverables`, and has
+-- since before 006 — it is one of Supabase's default privileges, and 006
+-- revoked anon only on the fourteen tables it created. Nothing here changes
+-- that; the row exists to prove it did not.
+--
+-- What stops an anonymous request today is RLS, not the grant: the only read
+-- policy that applies to anon on either table is `using (is_active_user())`,
+-- which is false without a session, so it gets zero rows. That is sound.
+--
+-- It is also inconsistent. On the fourteen mirror tables anon is denied by
+-- privilege AND policy; on these two by policy alone. Worth closing for the
+-- same reason 008 closed the is_active gap — not because the policy is likely
+-- to fail, but because a reader finding fourteen tables locked and two not has
+-- no way to tell a decision from an oversight:
+--
+--   revoke all on projects, deliverables from anon;
+--
+-- Not done here. It is a privilege change on live tables and belongs in a
+-- migration that says so, not in a footnote to a type change.
 --
 -- Column privileges survive a type change in Postgres, because they are held
 -- against the column's number rather than its type. Rows four to six check
@@ -177,11 +199,21 @@ comment on column deliverables.construction_start is
 --        has_column_privilege('cost_reader','public.projects','market','SELECT')::text
 -- union all select 'sync still cannot set active',
 --        (not has_column_privilege('airtable_sync','public.projects','is_active','UPDATE'))::text
--- union all select 'anon gained nothing',
---        coalesce((select string_agg(c.relname, ', ')
+-- union all select 'anon on projects/deliverables',
+--        coalesce((select string_agg(c.relname, ', ' order by c.relname)
 --                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
 --                   where n.nspname = 'public' and c.relkind = 'r'
 --                     and c.relname in ('projects','deliverables')
+--                     and has_table_privilege('anon', c.oid, 'SELECT')), 'none')
+-- union all select 'anon on the 14 mirror tables',
+--        coalesce((select string_agg(c.relname, ', ' order by c.relname)
+--                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+--                   where n.nspname = 'public' and c.relkind = 'r'
+--                     and c.relname in ('people','client_companies','subconsultants',
+--                       'contacts','pursuits','project_notes','time_entries',
+--                       'activity_log','bid_results','out_of_office',
+--                       'subconsultant_tasks','subconsultant_invoices',
+--                       'deliverable_subconsultants','deliverable_assignees')
 --                     and has_table_privilege('anon', c.oid, 'SELECT')), 'none');
 --
 -- ============================================================================
@@ -203,4 +235,10 @@ comment on column deliverables.construction_start is
 --
 -- 3. WHAT IS STILL LEFT OUT: construction_start on both tables, by the
 --    decision in section 3. Nothing else in phase one is unmapped.
+--
+-- 4. ONE THING THIS MIGRATION FOUND AND DID NOT FIX. anon holds table-level
+--    SELECT on projects and deliverables, where RLS is the only thing turning
+--    it away, while the fourteen mirror tables deny it by privilege as well.
+--    See the note in the verification block. A one-line revoke, deliberately
+--    left for a migration whose subject that is.
 -- ============================================================================
