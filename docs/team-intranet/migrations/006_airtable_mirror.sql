@@ -1092,6 +1092,8 @@ grant select (
 --   reader CANNOT read invoice   true
 --   reader CANNOT read collect.  true
 --   reader CANNOT read task_stat true
+--   reader KEEPS update(type)    true
+--   reader KEEPS update(status)  true
 --   reader CANNOT read people    true
 --   reader CANNOT read time_ent  true
 --   portal CAN read people.name  true
@@ -1173,6 +1175,19 @@ grant select (
 -- select 'reader CANNOT read task_stat',
 --        (not has_column_privilege('cost_reader','public.deliverables',
 --                                  'task_status','SELECT'))::text
+-- union all
+-- -- The revoke above removes SELECT only. Column-level UPDATE grants are
+-- -- separate ACL entries, so 005b's `grant update (type)` and 004's write
+-- -- grants must survive it. If either of these is false the reader has
+-- -- quietly lost the ability to correct a document, which would not show up
+-- -- as an error anywhere — it would just stop happening.
+-- select 'reader KEEPS update(type)',
+--        has_column_privilege('cost_reader','public.deliverables',
+--                             'type','UPDATE')::text
+-- union all
+-- select 'reader KEEPS update(status)',
+--        has_column_privilege('cost_reader','public.deliverables',
+--                             'status','UPDATE')::text
 -- union all
 -- select 'reader CANNOT read people',
 --        (not has_any_column_privilege('cost_reader','public.people','SELECT'))::text
