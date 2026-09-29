@@ -422,8 +422,13 @@ grant update (
   nda, need_to_fix_for_the_resume_builder, time_card_required,
   project_description, project_descriptions_for_resume,
   project_owner, scope_categories, project_image_paths,
-  airtable_created_at, is_active, missing_from_airtable_since, synced_at
+  airtable_created_at, synced_at
 ) on projects to airtable_sync;
+
+-- `is_active` and `missing_from_airtable_since` are NOT in that list. They are
+-- written only by sweep_missing_from_airtable() in §10, which refuses to run
+-- against a pass that did not finish. See the note there about how far this
+-- enforcement reaches.
 
 -- Withheld from UPDATE on deliverables, and this is the list that matters:
 --
@@ -462,9 +467,11 @@ grant update (
   construction_start, construction_completion, delivery_method,
   new_reno_demo_etc, project_size, report_format, work_breakdown,
   dcw_estimated_project_cost, project_folder_link,
-  airtable_created_at, airtable_last_modified_at,
-  is_active, missing_from_airtable_since, synced_at
+  airtable_created_at, airtable_last_modified_at, synced_at
 ) on deliverables to airtable_sync;
+
+-- Same omission as on projects, and for the same reason: `is_active` and
+-- `missing_from_airtable_since` belong to §10's sweep, not to the upsert.
 
 -- Deliberately no grant at all on: profiles, bootstrap_admins, the wishlist,
 -- estimates, audit_log, document_frames, line_items, reader_questions,
@@ -586,6 +593,287 @@ create policy airtable_mirror_read on storage.objects
 
 
 -- ============================================================================
+-- 10. sync_runs, and the sweep that cannot run without one
+--
+-- The never-delete rule works by marking a vanished row inactive instead of
+-- removing it. Deciding a row has vanished means knowing the full set the run
+-- saw — and that is only true of a run that FINISHED. A pass that died halfway
+-- and then swept would mark everything it had not reached as missing, which is
+-- the same disaster as deleting, arriving by a different door.
+--
+-- So there has to be something that records a run completing, and the sweep
+-- has to be unable to proceed without it. Not "the sync checks" — a sync that
+-- remembers to check is a sync that can forget.
+--
+-- SHAPED TO MATCH ingest_runs, WHICH ALREADY ANSWERS THE SAME QUESTION
+--
+-- `ingest_runs` (004) carries id, started_at, finished_at, triggered_by,
+-- scope, counts and notes. The spine here is deliberately identical, so
+-- "what ran in the last day, and did it finish" is the same query shape
+-- against either.
+--
+-- One difference, and it is the reason this table exists: `ingest_runs` has no
+-- outcome column — it infers success from docs_failed. That is fine for a
+-- report and not fine for a guard, because `finished_at is not null` cannot
+-- distinguish "finished having worked" from "finished having failed". So
+-- sync_runs records the outcome explicitly.
+--
+-- NOT DONE HERE, deliberately: adding a matching `outcome` to `ingest_runs`.
+-- It would be a column nothing writes until the reader is changed to write it,
+-- and a column that is always null is worse than an absent one. Worth doing
+-- the next time the reader is touched.
+-- ============================================================================
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'sync_run_outcome') then
+    create type sync_run_outcome as enum ('running', 'succeeded', 'failed', 'cancelled');
+  end if;
+end $$;
+
+create table if not exists sync_runs (
+  id            uuid primary key default gen_random_uuid(),
+  started_at    timestamptz not null default now(),
+  finished_at   timestamptz,
+  outcome       sync_run_outcome not null default 'running',
+
+  -- 'full', or a single table name when only part of the base was read. The
+  -- sweep is only ever valid after a 'full' pass: a partial one did not look
+  -- at the tables it would be marking.
+  scope         text not null default 'full',
+  dry_run       boolean not null default false,
+  triggered_by  uuid references profiles(id),
+  notes         text
+);
+
+create index if not exists sync_runs_started_idx on sync_runs (started_at desc);
+create index if not exists sync_runs_open_idx    on sync_runs (outcome)
+  where finished_at is null;
+
+comment on table sync_runs is
+  'One row per sync run. The outcome column exists because finished_at alone cannot tell a run that worked from one that failed, and the sweep in sweep_missing_from_airtable() depends on the difference.';
+
+-- Counts per table, one row each, rather than a jsonb blob on the run. The dry
+-- run's whole job is to report these, and "40 inserts, 2 of which already
+-- exist" is only answerable if the shape can hold both numbers.
+create table if not exists sync_run_tables (
+  run_id        uuid not null references sync_runs(id) on delete cascade,
+  table_name    text not null,
+
+  read_from_airtable  integer not null default 0,
+  inserted            integer not null default 0,
+  updated             integer not null default 0,
+  unchanged           integer not null default 0,
+
+  -- The duplicate check. `would_insert_existing` is the one that matters in a
+  -- dry run: a row the sync is about to INSERT that already has a match. It
+  -- should always be zero. Anything else means the key resolution is wrong —
+  -- most likely a null airtable_record_id, where nulls never conflict and the
+  -- unique constraint will not save you.
+  would_insert_existing integer not null default 0,
+  unresolved_parents    integer not null default 0,
+  anomalies             integer not null default 0,
+
+  primary key (run_id, table_name)
+);
+
+comment on column sync_run_tables.would_insert_existing is
+  'Rows the sync would INSERT that already have a match. Always expected to be zero; a non-zero value means key resolution is wrong. See migration 007 section 7 on the nullable airtable_record_id.';
+
+-- ----------------------------------------------------------------------------
+-- The sweep
+--
+-- Marks anything the given run did not see as inactive, and un-marks anything
+-- that has reappeared. It refuses outright unless the run finished, succeeded,
+-- was a full pass and was not a dry run.
+--
+-- SECURITY DEFINER so that it, and not the sync, holds the privilege to write
+-- `is_active` and `missing_from_airtable_since`. §7 withholds those columns
+-- from airtable_sync on projects and deliverables, so on those two tables the
+-- guard is real: the sync CANNOT mark a row inactive except by calling this,
+-- and this refuses without a finished run.
+--
+-- HOW FAR THAT REACHES, STATED PLAINLY SO NOBODY OVERREADS IT:
+--
+-- On the 14 tables 006 created, §7 grants table-level UPDATE, so airtable_sync
+-- retains the raw privilege to write `is_active` on them by hand. The guard is
+-- the sanctioned path there, not a wall. Closing that gap means converting
+-- those 14 grants to column-level — roughly 196 column names, entirely
+-- mechanical, and the same pattern already used on deliverables. Worth doing
+-- if the sweep ever moves out of one reviewed codebase; not done here because
+-- it is a large amount of migration for a gap that only a deliberate act
+-- reaches through.
+-- ----------------------------------------------------------------------------
+
+create or replace function sweep_missing_from_airtable(p_run_id uuid)
+  returns table (table_name text, marked_missing integer, marked_returned integer)
+  language plpgsql
+  security definer
+  set search_path = public
+as $sweep$
+declare
+  r        sync_runs%rowtype;
+  t        text;
+  n_gone   integer;
+  n_back   integer;
+  targets  text[] := array[
+    'people','client_companies','subconsultants','contacts','pursuits',
+    'project_notes','time_entries','activity_log','bid_results','out_of_office',
+    'subconsultant_tasks','subconsultant_invoices','projects','deliverables'];
+begin
+  select * into r from sync_runs where id = p_run_id;
+
+  if not found then
+    raise exception 'sweep refused: no sync_run %', p_run_id;
+  end if;
+  if r.finished_at is null then
+    raise exception 'sweep refused: run % has not finished', p_run_id;
+  end if;
+  if r.outcome <> 'succeeded' then
+    raise exception 'sweep refused: run % ended %, not succeeded', p_run_id, r.outcome;
+  end if;
+  if r.scope <> 'full' then
+    raise exception 'sweep refused: run % read only %, so it cannot say what is missing',
+                    p_run_id, r.scope;
+  end if;
+  if r.dry_run then
+    raise exception 'sweep refused: run % was a dry run', p_run_id;
+  end if;
+
+  foreach t in array targets loop
+    -- Not seen in this pass: mark it, and date it the first time only, so the
+    -- record of when it went missing survives later runs.
+    execute format($f$
+      update %I set is_active = false,
+                    missing_from_airtable_since = coalesce(missing_from_airtable_since, now())
+       where synced_at < $1 and is_active
+         %s $f$, t, case when t in ('projects','deliverables')
+                         then 'and airtable_record_id is not null' else '' end)
+      using r.started_at;
+    get diagnostics n_gone = row_count;
+
+    -- Came back. Airtable is the system of record; a reappearance is the
+    -- answer, and the gap is closed rather than remembered.
+    execute format($f$
+      update %I set is_active = true, missing_from_airtable_since = null
+       where synced_at >= $1 and not is_active $f$, t)
+      using r.started_at;
+    get diagnostics n_back = row_count;
+
+    table_name := t; marked_missing := n_gone; marked_returned := n_back;
+    return next;
+  end loop;
+end;
+$sweep$;
+
+comment on function sweep_missing_from_airtable(uuid) is
+  'Marks rows a finished sync run did not see as inactive, and revives any that reappeared. Refuses unless the run finished, succeeded, was a full pass and was not a dry run. SECURITY DEFINER so the privilege to write is_active lives here rather than with the sync. See migration 007 section 10.';
+
+-- Only the sync calls it, and only postgres owns it.
+revoke all on function sweep_missing_from_airtable(uuid) from public;
+grant execute on function sweep_missing_from_airtable(uuid) to airtable_sync;
+
+-- Opening and closing a run, and reporting counts. No DELETE, as everywhere.
+grant select, insert, update on sync_runs, sync_run_tables to airtable_sync;
+
+alter table sync_runs       enable row level security;
+alter table sync_run_tables enable row level security;
+
+drop policy if exists sync_runs_sync_read         on sync_runs;
+drop policy if exists sync_runs_sync_insert       on sync_runs;
+drop policy if exists sync_runs_sync_update       on sync_runs;
+drop policy if exists sync_runs_read              on sync_runs;
+drop policy if exists sync_run_tables_sync_read   on sync_run_tables;
+drop policy if exists sync_run_tables_sync_insert on sync_run_tables;
+drop policy if exists sync_run_tables_sync_update on sync_run_tables;
+drop policy if exists sync_run_tables_read        on sync_run_tables;
+
+create policy sync_runs_sync_read   on sync_runs for select to airtable_sync using (true);
+create policy sync_runs_sync_insert on sync_runs for insert to airtable_sync with check (true);
+create policy sync_runs_sync_update on sync_runs for update to airtable_sync using (true) with check (true);
+create policy sync_runs_read        on sync_runs for select to authenticated using (is_active_user());
+
+create policy sync_run_tables_sync_read   on sync_run_tables for select to airtable_sync using (true);
+create policy sync_run_tables_sync_insert on sync_run_tables for insert to airtable_sync with check (true);
+create policy sync_run_tables_sync_update on sync_run_tables for update to airtable_sync using (true) with check (true);
+create policy sync_run_tables_read        on sync_run_tables for select to authenticated using (is_active_user());
+
+revoke all on sync_runs, sync_run_tables from anon;
+grant select on sync_runs, sync_run_tables to authenticated;
+
+-- sync_anomalies.run_id now points at something real.
+alter table sync_anomalies
+  drop constraint if exists sync_anomalies_run_id_fkey;
+alter table sync_anomalies
+  add constraint sync_anomalies_run_id_fkey
+  foreign key (run_id) references sync_runs(id) on delete cascade;
+
+
+-- ============================================================================
+-- 11. Two things the estimators asked for
+--
+-- Both are read from the document, so both are the reader's to populate, and
+-- both are here rather than in a later migration because retrofitting either
+-- means re-reading every document already ingested. A migration in flight is
+-- the cheap moment.
+-- ============================================================================
+
+-- An allowance is a placeholder price carried where the drawings do not yet
+-- show enough to measure. In the data today it is indistinguishable from a
+-- measured line, which means it pools with real rates and quietly drags an
+-- average that somebody will later price work against.
+--
+-- Detected from the LABEL, not inferred from a missing quantity. Plenty of
+-- legitimate lines have no quantity, and plenty of allowances carry one.
+-- Guessing from shape would be wrong in both directions.
+--
+-- Nullable on purpose: false means the reader determined it is not an
+-- allowance, null means nothing has looked. Those are different, and the
+-- difference matters for the 0 documents ingested before this column existed.
+alter table line_items
+  add column if not exists is_allowance boolean;
+
+comment on column line_items.is_allowance is
+  'True when the line is an allowance — a placeholder where the drawings do not yet support a measurement. Read from the label, never inferred from a missing quantity. Null means no reader has looked.';
+
+create index if not exists line_items_allowance_idx
+  on line_items (is_allowance) where is_allowance;
+
+-- line_items UPDATE is column-level for cost_reader (004), so a new column is
+-- NOT automatically writable and this grant is required. INSERT is
+-- table-level, so the reader can set it when it first writes the line.
+grant update (is_allowance) on line_items to cost_reader;
+
+
+-- Cost-affecting conditions stated in the basis of estimate: tribal work,
+-- historical fabric, an unusual site constraint. The asterisk next to the
+-- number that says "this one is not like the others".
+--
+-- text[] rather than an enum. These are read from prose and the useful set is
+-- not known yet — an enum would force a migration every time an estimator
+-- names a new one, and the first few months are exactly when that will happen.
+-- Worth revisiting once the values have settled.
+alter table document_frames
+  add column if not exists special_considerations text[];
+
+comment on column document_frames.special_considerations is
+  'Cost-affecting conditions stated in the basis of estimate — tribal, historical, site constraints. Free text array rather than an enum because the useful set is not known yet. Pass one already reads this section.';
+
+create index if not exists document_frames_considerations_idx
+  on document_frames using gin (special_considerations);
+
+-- NO GRANT NEEDED HERE, and that is worth saying rather than leaving as an
+-- absence. cost_reader holds TABLE-level UPDATE and INSERT on document_frames
+-- (004), so this column is writable the moment it exists.
+--
+-- Which is the same mechanism 006 had to close on `deliverables`, where
+-- table-level SELECT would have handed the reader the billing columns. It is
+-- benign here — the reader owns every column of a frame, so there is nothing
+-- on that table it should not touch. Noted so the asymmetry reads as a
+-- decision rather than an oversight.
+
+
+-- ============================================================================
 -- VERIFICATION
 --
 -- Uncomment and run as a second query. Every row should read exactly this:
@@ -595,9 +883,18 @@ create policy airtable_mirror_read on storage.objects
 --   invoice_instructions renamed  true
 --   trigger is UPDATE only        true
 --   sync_anomalies exists         1
+--   sync_runs exists              1
+--   sync_run_tables exists        1
 --   airtable_sync exists          1
 --   airtable_sync no bypassrls    true
---   sync policies                 50   (16 tables x 3, plus 2 on sync_anomalies)
+--   sync policies                 56   (16 x 3, +2 anomalies, +3 runs, +3 run_tables)
+--   sync CANNOT set is_active     true
+--   sweep is security definer     true
+--   sweep executable by sync only true
+--   is_allowance exists           true
+--   reader CAN write allowance    true
+--   special_considerations exists true
+--   reader CAN write considerations true
 --   sync CAN insert people        true
 --   sync CAN update task_status   true
 --   sync CAN update phase_ii      true
@@ -613,11 +910,11 @@ create policy airtable_mirror_read on storage.objects
 --   bucket exists                 1
 --   sync relations                (the 17 named below, and nothing else)
 --
--- Expected relations: activity_log, bid_results, client_companies, contacts,
--- deliverable_assignees, deliverable_subconsultants, deliverables,
+-- Expected relations (19): activity_log, bid_results, client_companies,
+-- contacts, deliverable_assignees, deliverable_subconsultants, deliverables,
 -- out_of_office, people, project_notes, projects, pursuits,
 -- subconsultant_invoices, subconsultant_tasks, subconsultants,
--- sync_anomalies, time_entries.
+-- sync_anomalies, sync_run_tables, sync_runs, time_entries.
 --
 -- As in 004, treat the first run as the baseline. What matters is that the
 -- list does not GROW later.
@@ -685,6 +982,32 @@ create policy airtable_mirror_read on storage.objects
 --        (not has_any_column_privilege('airtable_sync','public.line_items','SELECT'))::text
 -- union all select 'sync CANNOT resolve anomalies',
 --        (not has_any_column_privilege('airtable_sync','public.sync_anomalies','UPDATE'))::text
+-- union all select 'sweep is security definer',
+--        (select prosecdef::text from pg_proc
+--          where proname='sweep_missing_from_airtable')
+-- union all select 'sweep executable by sync only',
+--        (has_function_privilege('airtable_sync','sweep_missing_from_airtable(uuid)','EXECUTE')
+--     and not has_function_privilege('authenticated','sweep_missing_from_airtable(uuid)','EXECUTE'))::text
+-- union all select 'sync_runs exists',
+--        (select count(*)::text from information_schema.tables
+--          where table_schema='public' and table_name='sync_runs')
+-- union all select 'sync_run_tables exists',
+--        (select count(*)::text from information_schema.tables
+--          where table_schema='public' and table_name='sync_run_tables')
+-- union all select 'sync CANNOT set is_active',
+--        (not has_column_privilege('airtable_sync','public.deliverables','is_active','UPDATE')
+--     and not has_column_privilege('airtable_sync','public.projects','is_active','UPDATE'))::text
+-- union all select 'is_allowance exists',
+--        (exists (select 1 from information_schema.columns where table_schema='public'
+--           and table_name='line_items' and column_name='is_allowance'))::text
+-- union all select 'reader CAN write allowance',
+--        has_column_privilege('cost_reader','public.line_items','is_allowance','UPDATE')::text
+-- union all select 'special_considerations exists',
+--        (exists (select 1 from information_schema.columns where table_schema='public'
+--           and table_name='document_frames' and column_name='special_considerations'))::text
+-- union all select 'reader CAN write considerations',
+--        has_column_privilege('cost_reader','public.document_frames',
+--                             'special_considerations','UPDATE')::text
 -- union all select 'bucket exists',
 --        (select count(*)::text from storage.buckets where id='airtable-mirror')
 -- union all select 'sync relations',
@@ -762,6 +1085,41 @@ create policy airtable_mirror_read on storage.objects
 --        returning completed_at;            -- expect a timestamp
 --
 --    Roll that back, or delete the test row afterwards.
+--
+-- 3b. PROVE THE SWEEP REFUSES. This is the guard that stops a half-finished
+--     pass marking the base as vanished, and like §8's policies it is only
+--     proved by trying it. Each of these should RAISE, not return rows:
+--
+--         -- an open run
+--         insert into sync_runs (scope) values ('full') returning id;   -- :open
+--         select * from sweep_missing_from_airtable(':open');
+--         -- expect: sweep refused: run ... has not finished
+--
+--         update sync_runs set finished_at = now(), outcome = 'failed'
+--          where id = ':open';
+--         select * from sweep_missing_from_airtable(':open');
+--         -- expect: sweep refused: run ... ended failed, not succeeded
+--
+--         update sync_runs set outcome = 'succeeded', scope = 'people'
+--          where id = ':open';
+--         select * from sweep_missing_from_airtable(':open');
+--         -- expect: sweep refused: run ... read only people
+--
+--         update sync_runs set scope = 'full', dry_run = true where id = ':open';
+--         select * from sweep_missing_from_airtable(':open');
+--         -- expect: sweep refused: run ... was a dry run
+--
+--         update sync_runs set dry_run = false where id = ':open';
+--         select * from sweep_missing_from_airtable(':open');
+--         -- expect: 14 rows of counts, all zero on an empty mirror
+--
+--     Then prove the sync cannot go round it, which is the whole point of
+--     withholding the column in §7:
+--
+--         set role airtable_sync;
+--         update deliverables set is_active = false where true;
+--         -- expect: ERROR, permission denied
+--         reset role;
 --
 -- 4. THE SYNC SETS completed_at AT INSERT. Because §5 no longer fires on
 --    insert, the sync is responsible for it: for a task whose Phase II is
