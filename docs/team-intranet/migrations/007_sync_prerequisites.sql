@@ -376,6 +376,21 @@ grant select, insert on sync_anomalies to airtable_sync;
 -- reader work on it to destroy, and the sync legitimately sets `source`,
 -- and `completed_at` (§5), when it creates one. The protection that matters
 -- is on UPDATE, which is where existing work can be overwritten.
+--
+-- THAT REASONING HOLDS ONLY IF THE SYNC NEVER INSERTS OVER AN EXISTING ROW,
+-- WHICH IS NOT AS AUTOMATIC AS IT SOUNDS:
+--
+--   The sync touches only rows where `source = 'airtable'`, and never
+--   matches on a null `airtable_record_id`.
+--
+-- The unique constraint on `airtable_record_id` catches the obvious duplicate.
+-- The subtle case it does not catch: `airtable_record_id` is NULLABLE — 001
+-- made it so for portal uploads, and `deliverables` holds two such rows today
+-- with a null key. In Postgres nulls never conflict, so an upsert keyed on
+-- that column will happily INSERT rather than match, and a sync that
+-- generalised "upsert on airtable_record_id" would mint a duplicate for every
+-- uploaded document on every run. Match on the key only when it is non-null,
+-- and filter to source = 'airtable' besides.
 -- ----------------------------------------------------------------------------
 
 grant select, insert on projects, deliverables to airtable_sync;
@@ -384,11 +399,20 @@ grant select, insert on projects, deliverables to airtable_sync;
 -- at insert), `stories`, `created_by` and `created_at` (the portal's).
 --
 -- `gross_sf` IS included, because the sync fills it where Airtable has a
--- building area. It is only populated for about 18% of projects, so the
--- reader's frame is the primary source and the sync must not overwrite a
--- value the reader established. No grant can express "only when it agrees" —
--- that is the sync's job, and a disagreement is a `gross_area` question in
--- reader_questions, not a silent overwrite.
+-- building area. Airtable has one for about 18% of projects, so the reader's
+-- frame is the primary source here, not the fallback.
+--
+-- THE RULE THE SYNC MUST FOLLOW, WHICH NO GRANT CAN EXPRESS:
+--
+--   write gross_sf only when it is currently null, or when Airtable's value
+--   equals what is already there. If Airtable has a value and Postgres has a
+--   different one, LEAVE POSTGRES ALONE and raise a `gross_area` question in
+--   reader_questions.
+--
+-- A sync that wrote this unconditionally would undo the reader's work on
+-- every run — silently, and the reader would not redo it, because the
+-- document is already accepted. The column would quietly revert to Airtable's
+-- sparse figures on a schedule.
 grant update (
   name, client_name, sector, market, region, city, gross_sf,
   delivery_method, construction_start, project_status,
