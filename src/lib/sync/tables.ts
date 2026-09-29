@@ -183,20 +183,11 @@ export const TABLES: readonly TableSpec[] = [
       // coercion reports every time it drops one, so the loss is counted in
       // sync_anomalies rather than invisible.
       { from: 'Primary Category', to: 'sector', kind: 'text' },
-      // Secondary Category is NOT MAPPED.
-      //
-      // `market` is a single text column and Airtable's Secondary Category is
-      // a multiple select that is genuinely multi-valued: in a sample of 100
-      // projects, 66 carried two or more, frequently four to eight
-      // ("Port", "Government / Essential Facilities", "Emergency /
-      // Operations", "Offices / Administrative" on one record). Keeping the
-      // first would discard real data on two thirds of projects, which is a
-      // different thing from the rare loss sector and city accept below.
-      //
-      // Needs a text[] column of its own before it can be carried. Left out
-      // rather than half-carried, because a `market` that silently holds one
-      // of six categories is worse than a `market` that is empty: the first
-      // looks like an answer.
+      // Now text[] (migration 009), because Secondary Category is genuinely
+      // multi-valued: 66 of 100 sampled projects carry two or more, often
+      // four to eight. sector and city stay scalar — 7% and 2% — and the
+      // coercion reports every value it drops there.
+      { from: 'Secondary Category', to: 'market', kind: 'text[]' },
       { from: 'Location (City, State)', to: 'city', kind: 'text' },
       { from: 'Delivery Method', to: 'delivery_method', kind: 'text' },
       // Construction Start Date is NOT MAPPED, and that is deliberate.
@@ -321,6 +312,11 @@ export const TABLES: readonly TableSpec[] = [
       // Completion is bare YEARS — "2018", "2019", "2020", "2021", "2022".
       // A year in a `date` column becomes the first of January, which is a
       // fact nobody stated. See the note on projects.
+      // Text, not date (migration 009). Airtable calls it a date; it is a
+      // single select of bare years — 2018 to 2022 — on 857 of 5,552 tasks.
+      // Real usage, so it is carried; "2018" in a date column would become
+      // the first of January, which nobody stated.
+      { from: '*Construction Completion Date', to: 'construction_completion', kind: 'text' },
       { from: '*Delivery Method', to: 'delivery_method', kind: 'text' },
       { from: '*New, Reno, Demo, Etc', to: 'new_reno_demo_etc', kind: 'text[]' },
       { from: '*Project Size', to: 'project_size', kind: 'text[]' },

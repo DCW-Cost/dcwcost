@@ -228,28 +228,34 @@ test('a multiple select feeding a text column reports the values it drops', () =
   assert.equal(coerce('text', ['Healthcare']).problem, undefined, 'one value is not a loss');
 });
 
-test('a genuinely multi-valued select is not squeezed into a single column', () => {
+test('a genuinely multi-valued select gets an array column, not the first value', () => {
   // Secondary Category carries 2+ values on 66 of 100 sampled projects,
-  // often four to eight. sector (7%) and city (2%) accept the loss and log
-  // it; market would have discarded real data on two thirds of projects,
-  // which is a different thing.
-  assert.ok(
-    !spec('projects').fields.some((f) => f.to === 'market'),
-    'market is a single text column; Secondary Category needs a text[] of its own'
-  );
-  assert.ok(spec('projects').fields.some((f) => f.to === 'sector'), 'sector is still carried');
+  // often four to eight, so migration 009 made market text[]. sector (7%)
+  // and city (2%) stay scalar and log what they drop — that loss is rare
+  // enough to accept; two thirds is not.
+  const market = spec('projects').fields.find((f) => f.to === 'market');
+  assert.equal(market?.kind, 'text[]', 'market must be read as a list');
+  assert.equal(spec('projects').fields.find((f) => f.to === 'sector')?.kind, 'text');
+  assert.equal(spec('projects').fields.find((f) => f.to === 'city')?.kind, 'text');
 });
 
-test('the bucket fields Airtable calls dates are not mapped as dates', () => {
-  // "Construction Start Date" is a single select of months ("May-21"), and
-  // the task-level completion one is bare years ("2018"). Both would parse
-  // into a confident, wrong date. Neither is carried until it has a home.
+test('a year bucket is carried as text, never coerced into a date', () => {
+  // "*Construction Completion Date" is a single select of bare years on 857
+  // of 5,552 tasks. new Date('2018') is 2018-01-01 — a January nobody said.
+  const f = spec('deliverables').fields.find((x) => x.to === 'construction_completion');
+  assert.equal(f?.kind, 'text');
+  assert.equal(coerce('text', '2018').value, '2018', 'the year survives as written');
+});
+
+test('construction_start is never mapped, on either table', () => {
+  // A single select of month buckets ("May-21") on 3 of 1,877 projects and
+  // 16 of 5,552 tasks — but the reason it stays out is whose fact it is.
+  // Construction start is the escalation target, which the reader reads from
+  // the document with evidence. Migration 009 section 3.
   for (const key of ['projects', 'deliverables'] as const) {
-    for (const f of spec(key).fields) {
-      assert.ok(
-        !f.to.startsWith('construction_'),
-        `${key}.${f.to} is mapped; those Airtable fields are buckets, not dates`
-      );
-    }
+    assert.ok(
+      !spec(key).fields.some((f) => f.to === 'construction_start'),
+      `${key}.construction_start belongs to the document, not to Airtable`
+    );
   }
 });
