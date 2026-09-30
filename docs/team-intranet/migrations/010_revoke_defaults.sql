@@ -183,6 +183,22 @@ from authenticated;
 -- so it would take away 007's `grant update (resolved_at, resolved_by,
 -- resolution) on sync_anomalies` — the path by which an admin marks an anomaly
 -- resolved. Revoke first, then give that back by name.
+--
+-- AND NOTE THE ASYMMETRY WITH 006, BECAUSE THE WRONG LESSON IS EASY TO DRAW.
+--
+-- 006 revoked SELECT on `deliverables` from cost_reader and proved that 004's
+-- and 005b's column-level UPDATE grants survived it untouched. That is true,
+-- and it is not the general rule. The rule is per privilege:
+--
+--   revoke SELECT  leaves column-level UPDATE alone — a different privilege
+--   revoke UPDATE  removes column-level UPDATE everywhere it was granted
+--
+-- Confirmed on a real Postgres: a role holding `grant update (b, c)` keeps b
+-- and c after a table-level `revoke select`, and loses both after a
+-- table-level `revoke update`. So "we checked in 006 and column grants
+-- survive a revoke" is the wrong generalisation to carry forward — it depends
+-- entirely on whether the revoked privilege is the same one the column grant
+-- named.
 -- ============================================================================
 
 revoke insert, update, delete, truncate, references, trigger on
