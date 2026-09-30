@@ -337,6 +337,21 @@ grant update (resolved_at, resolved_by, resolution) on sync_anomalies to authent
 --    A failure here looks like a permission error, not a silent nothing, which
 --    is the good direction — but find out on purpose rather than from Brittany.
 --
+--    AND READ THE ERROR, BECAUSE TWO DIFFERENT FAILURES LOOK SIMILAR:
+--
+--      "permission denied for table X"        a GRANT is missing. This
+--                                             migration took something it
+--                                             should not have.
+--      "new row violates row-level security"  the grant is intact and a
+--      or an UPDATE affecting zero rows       POLICY refused. Nothing to do
+--                                             with this migration.
+--
+--    That distinction is the whole difference between a regression and a
+--    working system behaving correctly. A replay without a real session
+--    produces the second for everything, because is_active_user() is false
+--    without one — which is why a clean replay cannot answer this question
+--    and signing in can.
+--
 -- 3. WHAT IS LEFT FOR THE NEXT ONE. `authenticated` still holds
 --    insert/update/delete on the five live-write tables and on the ten that
 --    have a deliberate policy and no UI yet. Narrowing those means matching
