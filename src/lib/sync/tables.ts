@@ -302,8 +302,19 @@ export const TABLES: readonly TableSpec[] = [
         parentColumn: 'deliverable_id', childColumn: 'person_id', linkTo: 'people' },
       { from: 'Project Support *', table: 'deliverable_project_support',
         parentColumn: 'deliverable_id', childColumn: 'person_id', linkTo: 'people' },
-      { from: 'Subconsultants', table: 'deliverable_subconsultants',
-        parentColumn: 'deliverable_id', childColumn: 'subconsultant_id', linkTo: 'subconsultants' },
+      // "Subconsultants" on DCW Project Tasks is NOT MAPPED, and the name is
+      // the trap. It does not link to the Subconsultants table — it links to
+      // SUBCONSULTANT TASKS (tblfus0PSLP8ASQDc), which is why its linked
+      // records display as "1", "2", "3" rather than company names.
+      //
+      // It is the inverse of Subconsultant Tasks → Project, so it is a
+      // reversed link: exactly the class 006 dropped 36 of, and one this map
+      // reintroduced by trusting the field's name. The relationship it
+      // describes is already modelled, as subconsultant_tasks.deliverable_id.
+      //
+      // The real chain is deliverable → subconsultant_tasks → subconsultant,
+      // and subconsultant_tasks carries status and notes as well. See the
+      // note on deliverable_subconsultants below.
     ],
     // The portal uploads documents into this table too. Those rows have a null
     // airtable_record_id and source 'upload', and the sync must never touch
