@@ -217,6 +217,16 @@ to airtable_sync;
 -- says to drive the privilege section from the migration's own object list;
 -- it did not say to check the list against the objects the rule ALREADY
 -- covers elsewhere, which is what would have caught this.
+-- Revoked first, so this is correct from either starting state. An earlier
+-- draft of this migration granted table-level UPDATE; a database that ran
+-- that draft and then this one would otherwise keep the table-level grant,
+-- because granting at column level does not remove it. The file was
+-- idempotent across runs of itself and not across versions of itself, which
+-- is a distinction worth having in every migration that narrows something.
+revoke update on
+  deliverable_project_managers, deliverable_project_support, project_client_contacts
+from airtable_sync;
+
 grant update (deliverable_id, person_id, synced_at)
   on deliverable_project_managers to airtable_sync;
 grant update (deliverable_id, person_id, synced_at)
