@@ -190,9 +190,39 @@ grant select on
   deliverable_project_managers, deliverable_project_support, project_client_contacts
 to authenticated;
 
-grant select, insert, update on
+grant select, insert on
   deliverable_project_managers, deliverable_project_support, project_client_contacts
 to airtable_sync;
+
+-- UPDATE is COLUMN-LEVEL, matching deliverable_subconsultants exactly.
+--
+-- It enumerates every column, so it permits precisely what a table-level
+-- grant would permit today — the two are identical in effect, and this is not
+-- a tightening. What it changes is the future: a column added to one of these
+-- tables later is automatically writable under a table-level grant and is not
+-- under this one. That is the same mechanism 006 had to close on
+-- `deliverables`, where table-level SELECT would have handed cost_reader the
+-- billing columns the moment they existed.
+--
+-- The reason to match rather than to leave it is legibility. 008 converted
+-- the fourteen mirror tables from table-level to column-level and
+-- deliverable_subconsultants went with them; these three were written
+-- afterwards and did not. Four join tables in two shapes is exactly the thing
+-- a reader cannot tell a decision from an oversight.
+--
+-- And it is the FOURTH instance of one pattern — 006's anon on fourteen
+-- tables rather than twenty-two, 007's sweep function, 007's three sync
+-- bookkeeping tables, and now this. Every one a rule applied to what existed
+-- when it was written rather than to what the rule was about. 010's header
+-- says to drive the privilege section from the migration's own object list;
+-- it did not say to check the list against the objects the rule ALREADY
+-- covers elsewhere, which is what would have caught this.
+grant update (deliverable_id, person_id, synced_at)
+  on deliverable_project_managers to airtable_sync;
+grant update (deliverable_id, person_id, synced_at)
+  on deliverable_project_support to airtable_sync;
+grant update (project_id, contact_id, synced_at)
+  on project_client_contacts to airtable_sync;
 
 -- No DELETE for the sync, as everywhere. These tables have no is_active, so a
 -- link removed in Airtable currently persists — see the note in §2. That is a
@@ -239,6 +269,8 @@ create policy project_client_contacts_sync_upd       on project_client_contacts 
 --   anon on the three            none
 --   authenticated: read only     true
 --   sync can write the three     true
+--   sync UPDATE is column-level  true
+--   all four join tables match   true
 --   sync cannot delete them      true
 --   sync relations               21
 --   reader relations             12
@@ -287,6 +319,17 @@ create policy project_client_contacts_sync_upd       on project_client_contacts 
 --                     and has_table_privilege('airtable_sync', t, 'INSERT')
 --                     and has_table_privilege('airtable_sync', t, 'UPDATE'))
 --           from three)::text
+-- union all select 'sync UPDATE is column-level',
+--        (select bool_and(not has_table_privilege('airtable_sync', t, 'UPDATE')
+--                     and has_column_privilege('airtable_sync', t, 'synced_at', 'UPDATE'))
+--           from three)::text
+-- union all select 'all four join tables match',
+--        (select bool_and(not has_table_privilege('airtable_sync', t, 'UPDATE')
+--                     and has_table_privilege('airtable_sync', t, 'INSERT')
+--                     and has_table_privilege('airtable_sync', t, 'SELECT')
+--                     and not has_table_privilege('airtable_sync', t, 'DELETE'))
+--           from (select t from three
+--                 union all values ('deliverable_subconsultants')) all_four(t))::text
 -- union all select 'sync cannot delete them',
 --        (select bool_and(not has_table_privilege('airtable_sync', t, 'DELETE')) from three)::text
 -- union all select 'sync relations',
