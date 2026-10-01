@@ -16,8 +16,8 @@
 import type { Db } from './db.ts';
 import { inTransaction } from './db.ts';
 import { RateLimiter, readTable, type AirtableRecord } from './airtable.ts';
-import { LOAD_ORDER, spec, TABLES, type TableKey } from './tables.ts';
-import { buildUpsert, planRow, type Issue, type RowPlan } from './plan.ts';
+import { LOAD_ORDER, spec, TABLES, type JoinSpec, type TableKey, type TableSpec } from './tables.ts';
+import { buildJoinUpsert, buildUpsert, planJoins, planRow, type Issue, type RowPlan } from './plan.ts';
 
 /** Upserts per transaction. Small enough to stay well inside the 60 s idle limit. */
 const BATCH = 200;
@@ -35,7 +35,8 @@ export interface SyncOptions {
 }
 
 export interface TableResult {
-  table: TableKey;
+  /** A mirror table, or a join table — both are reported in sync_run_tables. */
+  table: string;
   readFromAirtable: number;
   inserted: number;
   /**
@@ -72,9 +73,11 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
       if (Date.now() - started > RUN_BUDGET_MS) {
         throw new Error(`out of time before ${key}; ${Math.round((Date.now() - started) / 1000)}s elapsed`);
       }
-      const result = await syncTable(db, runId, key, keys, limiter, opts, log);
-      results.push(result);
-      await recordTable(db, runId, result);
+      const produced = await syncTable(db, runId, key, keys, limiter, opts, log);
+      for (const result of produced) {
+        results.push(result);
+        await recordTable(db, runId, result);
+      }
     }
 
     if (!opts.dryRun) await deriveGrossSf(db, runId, log);
@@ -99,7 +102,7 @@ async function syncTable(
   limiter: RateLimiter,
   opts: SyncOptions,
   log: (s: string) => void
-): Promise<TableResult> {
+): Promise<TableResult[]> {
   const t = spec(key);
   const records = await readTable(t.airtable, {
     apiKey: opts.apiKey,
@@ -217,6 +220,109 @@ async function syncTable(
 
   result.anomalies = issues.length;
   await recordAnomalies(db, runId, key, issues);
+
+  // Join tables come after the parent, because a join row needs the parent's
+  // uuid and that only exists once the parent has been written (or, in a dry
+  // run, once the sentinel map is in place).
+  const produced: TableResult[] = [result];
+  for (const join of t.joins ?? []) {
+    produced.push(await syncJoin(db, runId, t, join, records, keys, opts, log));
+  }
+  return produced;
+}
+
+/**
+ * One multi-valued Airtable link, written as rows in a join table.
+ *
+ * Reported in sync_run_tables under the join table's own name, so the dry run
+ * says "deliverable_project_managers: 412 rows" rather than hiding them
+ * inside the deliverables count.
+ *
+ * Links are added and never removed — see the comment on JoinSpec. A link
+ * deleted in Airtable leaves its row here, because the sync holds no DELETE
+ * and these tables have no is_active. That is an open question, not an
+ * oversight, and it is not quietly answered here.
+ */
+async function syncJoin(
+  db: Db,
+  runId: string,
+  parent: TableSpec,
+  join: JoinSpec,
+  records: AirtableRecord[],
+  keys: Map<TableKey, Map<string, string>>,
+  opts: SyncOptions,
+  log: (s: string) => void
+): Promise<TableResult> {
+  const result: TableResult = {
+    table: join.table,
+    readFromAirtable: 0,
+    inserted: 0,
+    updated: 0,
+    unchanged: 0,
+    wouldInsertExisting: 0,
+    unresolvedParents: 0,
+    anomalies: 0,
+    blocked: 0,
+  };
+
+  const parentKeys = keys.get(parent.key);
+  const childKeys = keys.get(join.linkTo);
+  const issues: { recordId: string; issue: Issue }[] = [];
+  const pairs: [string, string][] = [];
+
+  for (const record of records) {
+    for (const planned of planJoins(parent, record)) {
+      if (planned.join.table !== join.table) continue;
+      result.readFromAirtable += planned.childRecordIds.length;
+
+      const parentUuid = parentKeys?.get(planned.parentRecordId);
+      // The parent itself did not load — already counted and reported against
+      // the parent table, so it is not reported twice here.
+      if (!parentUuid) continue;
+
+      for (const childId of planned.childRecordIds) {
+        const childUuid = childKeys?.get(childId);
+        if (!childUuid) {
+          result.unresolvedParents++;
+          issues.push({
+            recordId: planned.parentRecordId,
+            issue: {
+              kind: 'unresolved_link',
+              field: join.childColumn,
+              airtableValue: childId,
+              detail:
+                `${childId} is not in ${join.linkTo}, so the link from ` +
+                `${planned.parentRecordId} was not recorded in ${join.table}.`,
+            },
+          });
+          continue;
+        }
+        pairs.push([parentUuid, childUuid]);
+      }
+    }
+  }
+
+  if (opts.dryRun) {
+    result.inserted = pairs.length;
+    log(`${join.table}: ${DRY} would write ${pairs.length} links, ${result.unresolvedParents} unresolved`);
+  } else {
+    const sql = buildJoinUpsert(join);
+    for (let i = 0; i < pairs.length; i += BATCH) {
+      const slice = pairs.slice(i, i + BATCH);
+      await inTransaction(db, async () => {
+        for (const [parentUuid, childUuid] of slice) {
+          const res = await db.query(sql, [parentUuid, childUuid]);
+          if (!res.rowCount) result.blocked++;
+          else if (res.rows[0]?.inserted) result.inserted++;
+          else result.updated++;
+        }
+      });
+    }
+    log(`${join.table}: ${result.inserted} new links, ${result.updated} re-stamped, ${result.blocked} blocked`);
+  }
+
+  result.anomalies = issues.length;
+  await recordAnomalies(db, runId, join.table, issues);
   return result;
 }
 
@@ -336,7 +442,7 @@ async function recordTable(db: Db, runId: string, r: TableResult): Promise<void>
 async function recordAnomalies(
   db: Db,
   runId: string,
-  table: TableKey,
+  table: string,
   issues: { recordId: string; issue: Issue }[]
 ): Promise<void> {
   for (let i = 0; i < issues.length; i += BATCH) {

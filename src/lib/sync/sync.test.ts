@@ -13,8 +13,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { coerce, unknownChoice } from './coerce.ts';
-import { buildUpsert, columnsFor, completedAtOnInsert, planRow, updatedColumns } from './plan.ts';
+import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
+import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
 
 // ---------------------------------------------------------------- coercion
@@ -258,4 +258,70 @@ test('construction_start is never mapped, on either table', () => {
       `${key}.construction_start belongs to the document, not to Airtable`
     );
   }
+});
+
+// ------------------------------------------------------------ join tables
+
+test('a link field yields every id, deduplicated, in order', () => {
+  assert.deepEqual(allRecordIds(['recAAAAAAAAAAAAAA', 'recBBBBBBBBBBBBBB']),
+    ['recAAAAAAAAAAAAAA', 'recBBBBBBBBBBBBBB']);
+  assert.deepEqual(allRecordIds(['recAAAAAAAAAAAAAA', 'recAAAAAAAAAAAAAA']), ['recAAAAAAAAAAAAAA']);
+  assert.deepEqual(allRecordIds([{ id: 'recAAAAAAAAAAAAAA', name: 'X' }]), ['recAAAAAAAAAAAAAA']);
+  assert.deepEqual(allRecordIds(undefined), []);
+});
+
+test('the join spec expresses the join table that already existed, unchanged', () => {
+  // deliverable_subconsultants was built by 006 and has never been written
+  // to. If the mechanism needed a special case to describe it, the mechanism
+  // would be wrong — so this is the test the shape had to pass.
+  const sub = spec('deliverables').joins?.find((j) => j.table === 'deliverable_subconsultants');
+  assert.ok(sub, 'the pre-existing join table must be expressible');
+  assert.equal(sub?.from, 'Subconsultants');
+  assert.equal(sub?.parentColumn, 'deliverable_id');
+  assert.equal(sub?.childColumn, 'subconsultant_id');
+  assert.equal(sub?.linkTo, 'subconsultants');
+});
+
+test('the asymmetric join needs no special path either', () => {
+  // project_client_contacts names neither side after the other, unlike the
+  // deliverable_* tables.
+  const j = spec('projects').joins?.[0];
+  assert.equal(j?.table, 'project_client_contacts');
+  assert.equal(j?.parentColumn, 'project_id');
+  assert.equal(j?.childColumn, 'contact_id');
+});
+
+test('the scalar columns the join tables replaced are gone from the map', () => {
+  // Migration 011 dropped these. A map still naming them would fail on the
+  // first upsert, which is loud — but finding it here is cheaper.
+  for (const gone of ['project_manager_id', 'project_support_id']) {
+    assert.ok(!spec('deliverables').fields.some((f) => f.to === gone), `deliverables.${gone}`);
+  }
+  assert.ok(!spec('projects').fields.some((f) => f.to === 'client_contact_id'));
+  // Next Action Owner is single-valued in Airtable and stays a scalar FK.
+  assert.ok(spec('deliverables').fields.some((f) => f.to === 'next_action_owner_id'));
+});
+
+test('a record becomes one planned join per populated link field', () => {
+  const planned = planJoins(spec('deliverables'), {
+    id: 'recABCDEFGHIJKLMN',
+    fields: {
+      'Project Manager *': ['recAAAAAAAAAAAAAA', 'recBBBBBBBBBBBBBB'],
+      'Subconsultants': ['recCCCCCCCCCCCCCC'],
+      // Project Support absent — an empty link contributes nothing
+    },
+  });
+  assert.equal(planned.length, 2, 'only the populated fields');
+  const pm = planned.find((p) => p.join.table === 'deliverable_project_managers');
+  assert.deepEqual(pm?.childRecordIds, ['recAAAAAAAAAAAAAA', 'recBBBBBBBBBBBBBB']);
+  assert.equal(pm?.parentRecordId, 'recABCDEFGHIJKLMN');
+});
+
+test('a join row re-stamps synced_at rather than doing nothing', () => {
+  // Same trap as the parent tables: "it already exists, skip it" is the
+  // natural optimisation, and the sweep reads synced_at to decide what a run
+  // failed to see. A link left unstamped looks like a link that vanished.
+  const sql = buildJoinUpsert(spec('projects').joins![0]);
+  assert.match(sql, /on conflict \(project_id, contact_id\) do update set synced_at = now\(\)/);
+  assert.match(sql, /returning \(xmax = 0\) as inserted/);
 });

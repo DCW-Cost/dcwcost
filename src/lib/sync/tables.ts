@@ -55,11 +55,55 @@ export interface FieldSpec {
   writeWhen?: 'always' | 'insert_only' | 'if_null_or_equal';
 }
 
+/**
+ * A multi-valued Airtable link that becomes rows in a join table.
+ *
+ * THIS IS THE ONE NON-DECLARATIVE PIECE OF THE SYNC, and saying so keeps the
+ * claim at the top of this file honest. A `FieldSpec` is read by generic code
+ * that turns it into a column; a `JoinSpec` needs about forty lines in run.ts
+ * that know what a join table is. That was the trade: one mechanism now, so
+ * that phase two stays entries in this file rather than new code.
+ *
+ * Kept as a separate list from `fields` rather than a `kind: 'links'` entry.
+ * Everything in `fields` maps to a column on this table; a join contributes
+ * none, so folding it in would make `to` optional and push a "skip this one"
+ * check into columnsFor, updatedColumns, buildUpsert and planRow. Two
+ * concepts, two lists.
+ *
+ * Both column names are explicit rather than derived from the table name.
+ * `deliverables → deliverable_id` and `projects → project_id` are one naive
+ * singularisation apart, and the first table that does not follow the pattern
+ * would break silently. Four tables is not enough to earn a rule.
+ *
+ * LINKS ARE ADDED AND NEVER REMOVED, and that is UNRESOLVED rather than
+ * overlooked. If a subconsultant is unlinked from a task in Airtable, the row
+ * here stays: the sync holds no DELETE on any table by design (007), and none
+ * of the four join tables has an `is_active` to mark the link gone. Whether a
+ * removed link is an error to flag — like a vanished project — or an ordinary
+ * edit to follow is a real question that applies identically to all four, and
+ * it is deliberately still open. Anyone finding the missing DELETE should read
+ * this rather than assume it was forgotten.
+ */
+export interface JoinSpec {
+  /** The multi-valued Airtable field on THIS table. */
+  from: string;
+  /** The join table rows are written into. */
+  table: string;
+  /** Column in the join table holding this table's id. */
+  parentColumn: string;
+  /** Column holding the linked record's id. */
+  childColumn: string;
+  /** Which mirror table `childColumn` resolves against. */
+  linkTo: TableKey;
+}
+
 export interface TableSpec {
   key: TableKey;
   /** Airtable table name. */
   airtable: string;
   fields: readonly FieldSpec[];
+  /** Multi-valued links that become rows elsewhere. See JoinSpec. */
+  joins?: readonly JoinSpec[];
   /** Columns set to a constant when the row is created. */
   insertConstants?: Readonly<Record<string, string>>;
   /**
@@ -174,10 +218,15 @@ export const TABLES: readonly TableSpec[] = [
     key: 'projects',
     airtable: 'New Project Entry',
     restrictUpdateTo: "projects.airtable_record_id is not null",
+    // 287 of 1,643 projects name more than one client contact — 17%, the
+    // highest multi-value rate in phase one. Migration 011.
+    joins: [
+      { from: 'Client Contact (Linked)', table: 'project_client_contacts',
+        parentColumn: 'project_id', childColumn: 'contact_id', linkTo: 'contacts' },
+    ],
     fields: [
       { from: 'Project Title', to: 'name', kind: 'text' },
       { from: 'Link to Client Company (Add Here)', to: 'client_id', kind: 'link', linkTo: 'client_companies' },
-      { from: 'Client Contact (Linked)', to: 'client_contact_id', kind: 'link', linkTo: 'contacts' },
       // sector, market and city are single `text` columns fed from Airtable
       // MULTIPLE selects. Keeping the first is all a text column can do; the
       // coercion reports every time it drops one, so the loss is counted in
@@ -240,6 +289,22 @@ export const TABLES: readonly TableSpec[] = [
     key: 'deliverables',
     airtable: 'DCW Project Tasks',
     insertConstants: { source: 'airtable' },
+    // Project Manager is multi-valued on 380 of 3,085 tasks (12%) and Project
+    // Support likewise, so both are join tables rather than scalar columns —
+    // a scalar would drop a person, silently, on one task in eight.
+    // Migration 011.
+    //
+    // Subconsultants was never mapped at all: 006 dropped it as one of the 36
+    // reversed links, and deliverable_subconsultants has sat empty since,
+    // with nothing able to fill it. This is what fills it.
+    joins: [
+      { from: 'Project Manager *', table: 'deliverable_project_managers',
+        parentColumn: 'deliverable_id', childColumn: 'person_id', linkTo: 'people' },
+      { from: 'Project Support *', table: 'deliverable_project_support',
+        parentColumn: 'deliverable_id', childColumn: 'person_id', linkTo: 'people' },
+      { from: 'Subconsultants', table: 'deliverable_subconsultants',
+        parentColumn: 'deliverable_id', childColumn: 'subconsultant_id', linkTo: 'subconsultants' },
+    ],
     // The portal uploads documents into this table too. Those rows have a null
     // airtable_record_id and source 'upload', and the sync must never touch
     // them — nulls never conflict, so the unique index alone would not stop it.
@@ -265,8 +330,6 @@ export const TABLES: readonly TableSpec[] = [
       { from: 'Schedule', to: 'schedule', kind: 'text' },
       { from: 'Schedule Notes', to: 'schedule_notes', kind: 'text' },
 
-      { from: 'Project Manager *', to: 'project_manager_id', kind: 'link', linkTo: 'people' },
-      { from: 'Project Support *', to: 'project_support_id', kind: 'link', linkTo: 'people' },
       { from: 'Next Action Owner', to: 'next_action_owner_id', kind: 'link', linkTo: 'people' },
 
       { from: 'Next Action', to: 'next_action', kind: 'text' },

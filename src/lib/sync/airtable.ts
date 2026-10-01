@@ -28,8 +28,15 @@ export interface AirtableRecord {
 }
 
 export class AirtableError extends Error {
-  constructor(message: string, readonly status?: number) {
+  readonly status?: number;
+  // Written out rather than declared as a constructor parameter property:
+  // Node's --experimental-strip-types removes types without transforming, and
+  // a parameter property is a transform. Netlify's bundler copes, so this
+  // would only have failed where the tests run — which is the worse place for
+  // it to fail, because that is where it would not be noticed.
+  constructor(message: string, status?: number) {
     super(message);
+    this.status = status;
   }
 }
 
