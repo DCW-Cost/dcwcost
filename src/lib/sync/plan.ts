@@ -212,7 +212,16 @@ export function planRow(spec: TableSpec, record: AirtableRecord): RowPlan {
         kind: 'coercion_failed',
         field: f.from,
         airtableValue: raw === undefined ? null : JSON.stringify(raw).slice(0, 200),
-        detail: `${f.from} → ${f.to}: ${c.problem}. Column left null; the record still loaded.`,
+        // Say what actually happened. The message used to read "Column left
+        // null" regardless, which is true of a number that would not parse
+        // and false of a multi-value that kept its first — and the second is
+        // most of them. A report that misdescribes itself is worse than no
+        // report, because it reads as informative.
+        detail:
+          `${f.from} → ${f.to}: ${c.problem}. ` +
+          (c.value === null
+            ? 'Column left null; the record still loaded.'
+            : 'The first value was written; the record still loaded.'),
       });
     }
 

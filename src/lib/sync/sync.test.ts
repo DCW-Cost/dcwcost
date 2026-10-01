@@ -270,19 +270,23 @@ test('a link field yields every id, deduplicated, in order', () => {
   assert.deepEqual(allRecordIds(undefined), []);
 });
 
-test('the join spec expresses the join table that already existed, unchanged', () => {
-  // deliverable_subconsultants was built by 006 and has never been written
-  // to. If the mechanism needed a special case to describe it, the mechanism
-  // would be wrong — so this is the test the shape had to pass.
-  const sub = spec('deliverables').joins?.find((j) => j.table === 'deliverable_subconsultants');
-  assert.ok(sub, 'the pre-existing join table must be expressible');
-  assert.equal(sub?.from, 'Subconsultants');
-  assert.equal(sub?.parentColumn, 'deliverable_id');
-  assert.equal(sub?.childColumn, 'subconsultant_id');
-  assert.equal(sub?.linkTo, 'subconsultants');
+test('the Subconsultants field is not mapped — it points at the wrong table', () => {
+  // The name says Subconsultants; the field links to SUBCONSULTANT TASKS,
+  // which is why its records display as "1", "2", "3" rather than company
+  // names. It is the inverse of Subconsultant Tasks -> Project, so it is a
+  // reversed link of the kind 006 dropped 36 of, and this map reintroduced
+  // one by trusting the field's name over its target.
+  assert.ok(
+    !spec('deliverables').joins?.some((j) => j.from === 'Subconsultants'),
+    'a reversed link must not be mapped, however it is named'
+  );
+  assert.ok(
+    !spec('deliverables').joins?.some((j) => j.table === 'deliverable_subconsultants'),
+    'deliverable_subconsultants has no source: the relationship is subconsultant_tasks'
+  );
 });
 
-test('the asymmetric join needs no special path either', () => {
+test('the mechanism still handles a join table named after neither side', () => {
   // project_client_contacts names neither side after the other, unlike the
   // deliverable_* tables.
   const j = spec('projects').joins?.[0];
@@ -307,8 +311,7 @@ test('a record becomes one planned join per populated link field', () => {
     id: 'recABCDEFGHIJKLMN',
     fields: {
       'Project Manager *': ['recAAAAAAAAAAAAAA', 'recBBBBBBBBBBBBBB'],
-      'Subconsultants': ['recCCCCCCCCCCCCCC'],
-      // Project Support absent — an empty link contributes nothing
+      'Project Support *': ['recCCCCCCCCCCCCCC'],
     },
   });
   assert.equal(planned.length, 2, 'only the populated fields');
@@ -357,4 +360,22 @@ test('every sync module and entry point imports under the test runner', async ()
   for (const m of modules) {
     await assert.doesNotReject(() => import(m), `${m} must import cleanly`);
   }
+});
+
+test('an anomaly says whether a value survived, not always "left null"', () => {
+  // The message was hardcoded to "Column left null", which is true of a
+  // number that would not parse and false of a multi-value that kept its
+  // first — and the second is most of them. A report that misdescribes
+  // itself reads as informative and is worse than none.
+  const kept = planRow(spec('projects'), {
+    id: 'recABCDEFGHIJKLMN',
+    fields: { 'Primary Category': ['Community', 'Parks'] },
+  });
+  assert.match(kept.issues[0].detail, /The first value was written/);
+
+  const lost = planRow(spec('projects'), {
+    id: 'recABCDEFGHIJKLMN',
+    fields: { 'Contract Amount': 'not a number' },
+  });
+  assert.match(lost.issues[0].detail, /Column left null/);
 });
