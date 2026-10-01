@@ -163,6 +163,27 @@ function describe(raw: unknown): string {
 }
 
 /**
+ * Every record id in a link field, in order.
+ *
+ * `coerce('link', …)` keeps the first and reports the rest as a problem,
+ * because the column it feeds holds one. A join table holds all of them, so
+ * this is the other half: same parsing, no loss, no complaint.
+ *
+ * Anything that is not a record id is skipped rather than throwing — the
+ * caller counts what it resolved against what it was given.
+ */
+export function allRecordIds(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  const items = Array.isArray(raw) ? raw : [raw];
+  const out: string[] = [];
+  for (const item of items) {
+    const id = recordId(item);
+    if (id !== null && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
  * A single-select value the field map did not expect.
  *
  * Renaming a choice in Airtable is a two-second edit with no visible

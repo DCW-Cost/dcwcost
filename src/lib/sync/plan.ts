@@ -21,8 +21,8 @@
  *  - `synced_at` is set on EVERY touched row, including rows whose values did
  *    not change. See the comment on SYNCED_AT below before removing that.
  */
-import type { FieldSpec, TableSpec } from './tables.ts';
-import { coerce, unknownChoice, type Coerced } from './coerce.ts';
+import type { FieldSpec, JoinSpec, TableSpec } from './tables.ts';
+import { allRecordIds, coerce, unknownChoice, type Coerced } from './coerce.ts';
 import { PHASE_II_COMPLETE } from './tables.ts';
 
 export interface AirtableRecord {
@@ -135,6 +135,51 @@ export function completedAtOnInsert(fields: Record<string, unknown>): string | n
   const due = coerce('date', fields['Due Date']);
   if (due.value === null || typeof due.value !== 'string') return null;
   return `${due.value}T00:00:00Z`;
+}
+
+/**
+ * The join-table rows one Airtable record implies, before resolution.
+ *
+ * Pure, like everything else here: it reads the record and the spec and
+ * returns what should exist, without knowing whether anything is written.
+ * The child ids are still Airtable record ids at this point — run.ts resolves
+ * them through the same key map that ordinary links use.
+ */
+export interface PlannedJoin {
+  join: JoinSpec;
+  /** The parent's Airtable record id. */
+  parentRecordId: string;
+  /** The linked records' Airtable ids, in the order Airtable gave them. */
+  childRecordIds: string[];
+}
+
+export function planJoins(spec: TableSpec, record: AirtableRecord): PlannedJoin[] {
+  const out: PlannedJoin[] = [];
+  for (const join of spec.joins ?? []) {
+    const childRecordIds = allRecordIds(record.fields[join.from]);
+    if (childRecordIds.length === 0) continue;
+    out.push({ join, parentRecordId: record.id, childRecordIds });
+  }
+  return out;
+}
+
+/**
+ * The statement that writes one join row.
+ *
+ * `on conflict do update set synced_at = now()` rather than `do nothing`: the
+ * sweep decides what a run failed to see by comparing synced_at against the
+ * run's start, so a link that still exists and was not stamped would look
+ * like one that had gone. Same reasoning as the parent tables, and the same
+ * trap — "it already exists, skip it" is the natural optimisation and is
+ * wrong for the same reason.
+ */
+export function buildJoinUpsert(join: JoinSpec): string {
+  return (
+    `insert into ${join.table} (${join.parentColumn}, ${join.childColumn}, synced_at)\n` +
+    `values ($1, $2, now())\n` +
+    `on conflict (${join.parentColumn}, ${join.childColumn}) do update set synced_at = now()\n` +
+    `returning (xmax = 0) as inserted`
+  );
 }
 
 /** Everything one Airtable record becomes, before links are resolved. */
