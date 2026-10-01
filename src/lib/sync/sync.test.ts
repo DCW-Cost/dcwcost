@@ -325,3 +325,36 @@ test('a join row re-stamps synced_at rather than doing nothing', () => {
   assert.match(sql, /on conflict \(project_id, contact_id\) do update set synced_at = now\(\)/);
   assert.match(sql, /returning \(xmax = 0\) as inserted/);
 });
+
+// ------------------------------------------------------- the bundler gap
+
+/**
+ * Every module must be importable by the test runner, not just by the bundler.
+ *
+ * `airtable.ts` once used a constructor parameter property. Netlify's esbuild
+ * transformed it happily; Node's --experimental-strip-types removes types
+ * without transforming, so it threw — and because nothing in this suite
+ * imported that module, nothing noticed. It broke only where no one was
+ * looking, which is the same shape as a verification block nothing runs.
+ *
+ * The suite covers three of the six sync modules by testing them. This covers
+ * the rest by the weakest possible means — importing them — which is exactly
+ * the check that was missing. It also covers the Netlify entry points, which
+ * no test will ever import for any other reason.
+ */
+test('every sync module and entry point imports under the test runner', async () => {
+  const modules = [
+    '../sync/coerce.ts',
+    '../sync/tables.ts',
+    '../sync/plan.ts',
+    '../sync/airtable.ts',
+    '../sync/db.ts',
+    '../sync/run.ts',
+    '../../../netlify/functions/airtable-sync-background.mts',
+    '../../../netlify/functions/reader-frame-background.mts',
+    '../../../netlify/functions/reader-sweep.mts',
+  ];
+  for (const m of modules) {
+    await assert.doesNotReject(() => import(m), `${m} must import cleanly`);
+  }
+});
