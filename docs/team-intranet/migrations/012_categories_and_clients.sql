@@ -332,15 +332,33 @@ create policy project_client_companies_sync_upd  on project_client_companies for
 --   v_observations exists        1
 --   v_observations is invoker    security_invoker=true
 --   three join tables, one shape true
---   anon on any view             none
+--   anon on ANY relation         none
+--   anon on any sequence         none
+--   authenticated writes a view  none
 --   anon on project_client_co.   none
 --   sync relations               21
 --   reader relations             13
+--
+-- Both counts now span every relkind rather than just tables, so if either
+-- comes back one higher than stated, that is the finding and not a typo:
+-- it means a view is carrying a privilege nobody granted it on purpose.
 --
 -- "three join tables, one shape" is the check worth having: after 011 there
 -- were four and they had to match; 012 drops one and adds one, so there are
 -- three and they still have to. The shape is table-level SELECT and INSERT,
 -- no table-level UPDATE, column-level UPDATE on synced_at, and no DELETE.
+--
+-- "anon on ANY relation" IS THE STANDING QUERY, and it replaces the one in
+-- 010 rather than sitting alongside it. 010 asked with relkind = 'r', which
+-- is how three views kept full privileges through a migration whose entire
+-- subject was revoking them — the check and the fix shared a blind spot.
+--
+-- This one asks across every relkind: ordinary tables, views, materialised
+-- views, partitioned tables and foreign tables, plus sequences, which carry
+-- their own privileges and would not appear under any of the above. Five
+-- instances of the same shape is enough to stop writing a narrower version
+-- each time. Copy these three rows into every migration that grants or
+-- revokes anything.
 --
 -- `reader relations` moves 12 → 13: cost_reader gains v_observations, which
 -- it could read before only because the view carried default privileges. Now
@@ -354,7 +372,7 @@ create policy project_client_companies_sync_upd  on project_client_companies for
 -- all_join(t) as (select t from three union all values ('project_client_companies')),
 -- pub as (select c.oid, c.relname, c.relkind from pg_class c
 --           join pg_namespace n on n.oid = c.relnamespace
---          where n.nspname='public' and c.relkind in ('r','v'))
+--          where n.nspname='public' and c.relkind in ('r','v','m','p','f'))
 -- select 'sector is text[]' as item,
 --        (select (data_type='ARRAY')::text from information_schema.columns
 --          where table_schema='public' and table_name='projects' and column_name='sector') as value
@@ -383,16 +401,36 @@ create policy project_client_companies_sync_upd  on project_client_companies for
 --                     and not has_table_privilege('airtable_sync', t,'DELETE')
 --                     and has_column_privilege('airtable_sync', t,'synced_at','UPDATE'))
 --           from all_join)::text
--- union all select 'anon on any view',
---        coalesce((select string_agg(relname, ', ' order by relname) from pub
---                   where relkind='v' and has_table_privilege('anon', oid, 'SELECT')), 'none')
+-- union all select 'anon on ANY relation',
+--        coalesce((select string_agg(c.relname || ' (' || c.relkind || ')', ', ' order by c.relname)
+--                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+--                   where n.nspname = 'public' and c.relkind in ('r','v','m','p','f')
+--                     and (has_table_privilege('anon', c.oid, 'SELECT')
+--                       or has_table_privilege('anon', c.oid, 'INSERT')
+--                       or has_table_privilege('anon', c.oid, 'UPDATE')
+--                       or has_table_privilege('anon', c.oid, 'DELETE')
+--                       or has_table_privilege('anon', c.oid, 'TRUNCATE'))), 'none')
+-- union all select 'anon on any sequence',
+--        coalesce((select string_agg(c.relname, ', ' order by c.relname)
+--                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+--                   where n.nspname = 'public' and c.relkind = 'S'
+--                     and (has_sequence_privilege('anon', c.oid, 'USAGE')
+--                       or has_sequence_privilege('anon', c.oid, 'SELECT')
+--                       or has_sequence_privilege('anon', c.oid, 'UPDATE'))), 'none')
+-- union all select 'authenticated writes a view',
+--        coalesce((select string_agg(c.relname, ', ' order by c.relname)
+--                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+--                   where n.nspname = 'public' and c.relkind in ('v','m')
+--                     and (has_table_privilege('authenticated', c.oid, 'INSERT')
+--                       or has_table_privilege('authenticated', c.oid, 'UPDATE')
+--                       or has_table_privilege('authenticated', c.oid, 'DELETE'))), 'none')
 -- union all select 'anon on project_client_co.',
 --        coalesce((select string_agg(relname, ', ') from pub
 --                   where relname='project_client_companies'
 --                     and has_table_privilege('anon', oid, 'SELECT')), 'none')
 -- union all select 'sync relations',
---        (select count(*)::text from pub where relkind='r'
---          and (has_any_column_privilege('airtable_sync', oid,'SELECT')
+--        (select count(*)::text from pub
+--          where (has_any_column_privilege('airtable_sync', oid,'SELECT')
 --            or has_any_column_privilege('airtable_sync', oid,'INSERT')
 --            or has_any_column_privilege('airtable_sync', oid,'UPDATE')))
 -- union all select 'reader relations',
