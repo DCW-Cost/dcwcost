@@ -199,3 +199,57 @@ the part they solve with a human services team. Their enterprise tier at
 $30–60k/year sits **above the $20k CEO limit in your own governance matrix
 (item #13)**, so it is a Board decision needing about two months of lead time.
 That is worth knowing before it comes up in a room.
+
+---
+
+## Destructive operations — read before running any of these
+
+### `delete from projects;` — correct ONCE, catastrophic afterwards
+
+On 5 October 2026, before the first Airtable sync wrote anything, `projects`
+held five rows and all five were created by the reader from uploaded
+documents. Every one had `airtable_record_id = null`. They were deleted
+deliberately, with no `WHERE` clause, so the upload path could be exercised
+properly — picking a real project from the dropdown rather than hand-editing
+ids to make orphans look linked.
+
+**That statement is now the most dangerous line in this document.** After the
+sync, `projects` holds roughly 1,878 rows, and `delete from projects` cascades
+to `deliverables`, `document_frames`, `line_items`, `reader_questions`,
+`project_client_companies`, `project_client_contacts`, `bid_results`,
+`project_notes` and `time_entries`. It would take the entire mirror and every
+document the reader has ever framed.
+
+Nothing in the database prevents it. The row count is the only difference
+between the correct version and the catastrophic one.
+
+If a project genuinely has to go, name it:
+
+```sql
+delete from projects where id = '…';
+```
+
+### Before deleting anything that a document hangs off
+
+Two foreign keys behave differently from the rest and both matter:
+
+- `projects → estimates` is **ON DELETE NO ACTION**. One referencing estimate
+  makes the delete raise. There were zero on 5 October; that was luck.
+- `deliverables → ingest_runs` is **ON DELETE SET NULL**, not cascade. The run
+  rows survive with `deliverable_id = null`. That is deliberate — a run
+  happened, and deleting the record of it because the document it read is gone
+  would be deleting a fact about the past.
+
+Everything else cascades.
+
+### What was exported first
+
+`reader-pass-one-snapshot.json` in this directory holds the five projects,
+three deliverables, two document frames, five ingest runs and eight reader
+questions as they stood immediately before the delete — with the full evidence
+strings, the markup components, and the cost figures ($1.6885 for Oregon Zoo,
+$1.2101 for Evergreen).
+
+The two kept ingest runs are the comparison for the re-read. They link to the
+new runs only through the `sha256` prefix and byte count in their `notes` text,
+since `deliverable_id` is now null — so matching them is a `like`, not a join.
