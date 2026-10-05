@@ -17,7 +17,6 @@ import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
 import { renderPlan, selectedTables } from './run.ts';
-import { renderPlan } from './run.ts';
 import { readFileSync } from 'node:fs';
 
 // ---------------------------------------------------------------- coercion
@@ -527,6 +526,8 @@ test('an unknown table name fails the run rather than syncing less', () => {
   // for and report success, which is the failure this whole option exists
   // to avoid on a first real run.
   assert.throws(() => selectedTables(['peoples' as never]), /unknown table\(s\): peoples/);
+});
+
 test('the text match only sees fields the table maps', () => {
   // The failure this guards is the one the first dry run produced: Airtable
   // returns every field including lookups the map ignores, so a person's
@@ -548,6 +549,8 @@ test('the text match only sees fields the table maps', () => {
   // the same reason it must not drive a match.
   assert.ok(!out.includes('Oregon Zoo'), 'an unmapped lookup is not written');
   assert.match(out, /task_name = "Site Visit"/);
+});
+
 // ------------------------------------------- createdTime is not a field
 
 test('airtable_created_at comes from the record, not the date-only field', () => {
