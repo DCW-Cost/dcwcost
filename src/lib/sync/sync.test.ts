@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
-import { renderPlan } from './run.ts';
+import { renderPlan, selectedTables } from './run.ts';
 
 // ---------------------------------------------------------------- coercion
 
@@ -506,4 +506,23 @@ test('a link that did not resolve is named, not silently null', () => {
   };
   const out = renderPlan(spec('deliverables'), planRow(spec('deliverables'), record), record);
   assert.match(out, /project_id = UNRESOLVED \(recMISSING0000000 not found in projects\)/);
+});
+
+// ------------------------------------------------------------ run scope
+
+test('a scoped run writes parents before children whatever order is asked', () => {
+  // The list arrives from an HTTP body, where nothing guarantees sensible
+  // order. A child written before its parent resolves no links at all, so
+  // the request is intersected with LOAD_ORDER rather than trusted.
+  assert.deepEqual(selectedTables(['deliverables', 'projects']), ['projects', 'deliverables']);
+  assert.deepEqual(selectedTables(['people', 'subconsultants']), ['people', 'subconsultants']);
+  assert.deepEqual(selectedTables(), [...LOAD_ORDER]);
+  assert.deepEqual(selectedTables([]), [...LOAD_ORDER], 'empty means all, not none');
+});
+
+test('an unknown table name fails the run rather than syncing less', () => {
+  // Silently dropping a misspelling would sync fewer tables than were asked
+  // for and report success, which is the failure this whole option exists
+  // to avoid on a first real run.
+  assert.throws(() => selectedTables(['peoples' as never]), /unknown table\(s\): peoples/);
 });

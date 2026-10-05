@@ -23,6 +23,12 @@
  *                               into the log AND into sync_runs.notes, so the
  *                               values can be read back without the logs
  *   { "showLimit": 5 }          cap per table (default 5)
+ *   { "tables": ["people","subconsultants"] }
+ *                               sync only these. Order is ignored — the list
+ *                               is intersected with LOAD_ORDER so parents are
+ *                               still written before children. A table left
+ *                               out still has its keys loaded, so links into
+ *                               it resolve against what is already mirrored.
  */
 import type { Context } from '@netlify/functions';
 import { withDb } from '../../src/lib/sync/db.ts';
@@ -64,6 +70,7 @@ export default async (req: Request, _context: Context) => {
     sampleSize?: unknown;
     showRecords?: unknown;
     showLimit?: unknown;
+    tables?: unknown;
   };
   const dryRun = body.dryRun === true;
   const sampleSize =
@@ -75,6 +82,12 @@ export default async (req: Request, _context: Context) => {
     : undefined;
   const showLimit =
     typeof body.showLimit === 'number' && body.showLimit > 0 ? Math.floor(body.showLimit) : undefined;
+  // Not validated here: runSync rejects an unknown name by throwing, which
+  // closes the run as failed with the reason. Silently dropping a misspelled
+  // table would sync less than was asked for and report success.
+  const tables = Array.isArray(body.tables)
+    ? (body.tables.filter((v): v is string => typeof v === 'string' && v.trim() !== '') as never)
+    : undefined;
 
   const started = Date.now();
   try {
@@ -86,6 +99,7 @@ export default async (req: Request, _context: Context) => {
         sampleSize,
         showRecords,
         showLimit,
+        tables,
         log: (line) => console.log(`[sync] ${line}`),
       })
     );
