@@ -31,8 +31,19 @@ export interface SyncOptions {
   dryRun: boolean;
   /** Read at most this many records per table. For a quick look, not for a real run. */
   sampleSize?: number;
+  /**
+   * Airtable record ids, or any text to match against a record's field
+   * values. Every match has its planned row rendered in full — see
+   * renderPlan below for why counts are not enough.
+   */
+  showRecords?: string[];
+  /** Cap per table, so a loose match cannot turn a run into a dump. */
+  showLimit?: number;
   log?: (line: string) => void;
 }
+
+/** Default cap for showRecords. Enough to check a few, too few to flood. */
+const SHOW_LIMIT = 5;
 
 export interface TableResult {
   /** A mirror table, or a join table — both are reported in sync_run_tables. */
@@ -67,13 +78,15 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
   /** airtable_record_id → mirror uuid, per table, for resolving links. */
   const keys = new Map<TableKey, Map<string, string>>();
   const results: TableResult[] = [];
+  /** Rendered rows from showRecords, appended to sync_runs.notes at the end. */
+  const samples: string[] = [];
 
   try {
     for (const key of LOAD_ORDER) {
       if (Date.now() - started > RUN_BUDGET_MS) {
         throw new Error(`out of time before ${key}; ${Math.round((Date.now() - started) / 1000)}s elapsed`);
       }
-      const produced = await syncTable(db, runId, key, keys, limiter, opts, log);
+      const produced = await syncTable(db, runId, key, keys, limiter, opts, log, samples);
       for (const result of produced) {
         results.push(result);
         await recordTable(db, runId, result);
@@ -82,7 +95,12 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
 
     if (!opts.dryRun) await deriveGrossSf(db, runId, log);
 
-    await closeRun(db, runId, 'succeeded', summarise(results));
+    await closeRun(
+      db,
+      runId,
+      'succeeded',
+      summarise(results) + (samples.length ? `\n\nSAMPLED ROWS\n${samples.join('\n\n')}` : '')
+    );
     log(`run ${runId} succeeded`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -101,7 +119,8 @@ async function syncTable(
   keys: Map<TableKey, Map<string, string>>,
   limiter: RateLimiter,
   opts: SyncOptions,
-  log: (s: string) => void
+  log: (s: string) => void,
+  samples: string[] = []
 ): Promise<TableResult[]> {
   const t = spec(key);
   const records = await readTable(t.airtable, {
@@ -169,6 +188,24 @@ async function syncTable(
       }
     }
     plans.push(plan);
+  }
+
+  // After link resolution, so a rendered row shows the uuid a link became
+  // rather than the Airtable id it started as. On a dry run that uuid is the
+  // sentinel, which is itself worth seeing.
+  if (opts.showRecords?.length) {
+    const byId = new Map(records.filter((r) => r.id).map((r) => [r.id, r]));
+    let shown = 0;
+    for (const plan of plans) {
+      if (shown >= (opts.showLimit ?? SHOW_LIMIT)) break;
+      const record = byId.get(plan.airtableRecordId);
+      if (!record || !matchesAny(record, opts.showRecords)) continue;
+      shown++;
+      const rendered = renderPlan(t, plan, record);
+      samples.push(rendered);
+      for (const line of rendered.split('\n')) log(line);
+    }
+    if (shown) log(`${key}: rendered ${shown} sampled row${shown === 1 ? '' : 's'}`);
   }
 
   if (opts.dryRun) {
@@ -458,6 +495,64 @@ async function recordAnomalies(
       }
     });
   }
+}
+
+/**
+ * What one record would become, column by column.
+ *
+ * COUNTS SAY A RUN HAPPENED; VALUES SAY IT READ CORRECTLY. Every number this
+ * file produces is blind to the error that matters most — a field mapped to
+ * the wrong column, a multiple select landing as one value, a date shifted by
+ * a timezone, an Airtable field renamed so a column quietly stops filling.
+ * All of those are structurally perfect and read 0 anomalies. The only way to
+ * see them is to look at a row for a project somebody knows.
+ *
+ * Rendered after link resolution, so a link shows the uuid it became. Nulls
+ * are counted rather than listed: on deliverables that is 46 of 63 columns on
+ * a typical task, and printing them buries the 17 that matter.
+ *
+ * Pure, and called only when showRecords names something, so an ordinary run
+ * pays nothing for it.
+ */
+export function renderPlan(t: TableSpec, plan: RowPlan, record: AirtableRecord): string {
+  const out: string[] = [`${t.key}  ${plan.airtableRecordId}`];
+  let nulls = 0;
+
+  for (let i = 0; i < plan.columns.length; i++) {
+    const value = plan.values[i];
+    if (value === null || value === undefined) {
+      nulls++;
+      continue;
+    }
+    const shown = Array.isArray(value)
+      ? `[${value.map((v) => JSON.stringify(v)).join(', ')}]  (${value.length})`
+      : JSON.stringify(value);
+    out.push(`  ${plan.columns[i]} = ${shown}`);
+  }
+  out.push(`  (${nulls} of ${plan.columns.length} columns null)`);
+
+  for (const planned of planJoins(t, record)) {
+    out.push(`  JOIN ${planned.join.table} -> ${planned.join.linkTo}: ${planned.childRecordIds.join(', ')}`);
+  }
+
+  if (plan.issues.length === 0) out.push('  no anomalies');
+  for (const issue of plan.issues) out.push(`  ANOMALY [${issue.kind}] ${issue.detail}`);
+
+  return out.join('\n');
+}
+
+/**
+ * An id, or any text appearing anywhere in the record's fields.
+ *
+ * Matching the whole record rather than a named field is deliberate: the
+ * point is to find "that Oregon Zoo project" without first knowing which
+ * field carries the name, and a task is found by its project just as often
+ * as by its own title.
+ */
+function matchesAny(record: AirtableRecord, terms: readonly string[]): boolean {
+  if (terms.some((term) => term === record.id)) return true;
+  const haystack = JSON.stringify(record.fields ?? {}).toLowerCase();
+  return terms.some((term) => term.length > 0 && haystack.includes(term.toLowerCase()));
 }
 
 function summarise(results: TableResult[]): string {

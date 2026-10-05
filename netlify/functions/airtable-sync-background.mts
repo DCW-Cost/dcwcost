@@ -18,6 +18,11 @@
  * POST body, all optional:
  *   { "dryRun": true }          report what would be written, write nothing
  *   { "sampleSize": 50 }        read at most n records per table
+ *   { "showRecords": ["Oregon Zoo", "recW3IXu..."] }
+ *                               render those records' planned rows in full,
+ *                               into the log AND into sync_runs.notes, so the
+ *                               values can be read back without the logs
+ *   { "showLimit": 5 }          cap per table (default 5)
  */
 import type { Context } from '@netlify/functions';
 import { withDb } from '../../src/lib/sync/db.ts';
@@ -54,10 +59,22 @@ export default async (req: Request, _context: Context) => {
     return;
   }
 
-  const body = (await req.json().catch(() => ({}))) as { dryRun?: unknown; sampleSize?: unknown };
+  const body = (await req.json().catch(() => ({}))) as {
+    dryRun?: unknown;
+    sampleSize?: unknown;
+    showRecords?: unknown;
+    showLimit?: unknown;
+  };
   const dryRun = body.dryRun === true;
   const sampleSize =
     typeof body.sampleSize === 'number' && body.sampleSize > 0 ? Math.floor(body.sampleSize) : undefined;
+  // Strings only, and non-empty: an empty term matches every record, which
+  // would turn a sample into a dump of the whole base.
+  const showRecords = Array.isArray(body.showRecords)
+    ? body.showRecords.filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+    : undefined;
+  const showLimit =
+    typeof body.showLimit === 'number' && body.showLimit > 0 ? Math.floor(body.showLimit) : undefined;
 
   const started = Date.now();
   try {
@@ -67,6 +84,8 @@ export default async (req: Request, _context: Context) => {
         baseId: baseId!,
         dryRun,
         sampleSize,
+        showRecords,
+        showLimit,
         log: (line) => console.log(`[sync] ${line}`),
       })
     );

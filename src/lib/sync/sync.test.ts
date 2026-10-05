@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
+import { renderPlan } from './run.ts';
 
 // ---------------------------------------------------------------- coercion
 
@@ -432,4 +433,51 @@ test('an anomaly says whether a value survived, not always "left null"', () => {
     fields: { 'Contract Amount': 'not a number' },
   });
   assert.match(lost.issues[0].detail, /Column left null/);
+});
+
+// ------------------------------------------------- showing values, not counts
+
+test('a rendered row shows the values, the joins and the nulls as a count', () => {
+  // The whole point of showRecords: counts are blind to a field mapped to the
+  // wrong column or a multi-select landing as one value. Both read 0
+  // anomalies. Only a printed row shows them.
+  const record = {
+    id: 'recW3IXuUePp2V1Bq',
+    fields: {
+      'Project Title': 'Oregon Zoo Entry Plaza and Polar Plaza Shelter',
+      'Primary Category': [{ name: 'Community' }],
+      'Secondary Category': [{ name: 'Zoo & Aquariums' }, { name: 'Plaza' }],
+      'Location (City, State)': [{ name: 'Portland, OR' }],
+      'Link to Client Company (Add Here)': [{ id: 'recrscv0dGezArGmi' }],
+    },
+  };
+  const out = renderPlan(spec('projects'), planRow(spec('projects'), record), record);
+
+  assert.match(out, /name = "Oregon Zoo Entry Plaza and Polar Plaza Shelter"/);
+  // The three columns 012 widened, each as a list — this is the assertion
+  // that would have failed before 012 and said so in a way a count could not.
+  assert.match(out, /sector = \["Community"\]\s+\(1\)/);
+  assert.match(out, /market = \["Zoo & Aquariums", "Plaza"\]\s+\(2\)/);
+  assert.match(out, /city = \["Portland, OR"\]\s+\(1\)/);
+  assert.match(out, /JOIN project_client_companies -> client_companies: recrscv0dGezArGmi/);
+  assert.match(out, /columns null/, 'nulls are counted, not listed');
+  assert.match(out, /no anomalies/);
+});
+
+test('a complete task renders the completed_at the sync derived', () => {
+  // completed_at comes from neither a column nor a constant — it is derived
+  // from Phase II plus Due Date, so it is exactly the kind of value worth
+  // seeing rather than trusting.
+  const record = {
+    id: 'recKtnJugR0TUc2D6',
+    fields: {
+      'Task Name': '30% Schematic Design (Polar Plaza Only)',
+      'Phase II: On the Table (Workflow)': { name: 'Complete' },
+      'Due Date': '2025-03-07',
+      'Project Manager *': [{ id: 'reckA16yMOzFxZUiu' }],
+    },
+  };
+  const out = renderPlan(spec('deliverables'), planRow(spec('deliverables'), record), record);
+  assert.match(out, /completed_at = "2025-03-07T00:00:00Z"/);
+  assert.match(out, /JOIN deliverable_project_managers -> people: reckA16yMOzFxZUiu/);
 });
