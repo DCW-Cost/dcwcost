@@ -481,3 +481,29 @@ test('a complete task renders the completed_at the sync derived', () => {
   assert.match(out, /completed_at = "2025-03-07T00:00:00Z"/);
   assert.match(out, /JOIN deliverable_project_managers -> people: reckA16yMOzFxZUiu/);
 });
+
+test('a long value is cut, with its real length kept', () => {
+  // project_description is ~1,000 characters on a real project. Five
+  // rendered rows would be mostly one field, and the columns worth checking
+  // would scroll past.
+  const record = {
+    id: 'recW3IXuUePp2V1Bq',
+    fields: { 'Project Title': 'Zoo', 'Project Description': 'x'.repeat(1000) },
+  };
+  const out = renderPlan(spec('projects'), planRow(spec('projects'), record), record);
+  assert.match(out, /… \(1002 chars\)/, 'cut, and says how much was cut');
+  assert.ok(out.length < 700, `rendered row stays small, got ${out.length}`);
+  assert.match(out, /name = "Zoo"/, 'the short columns are still legible');
+});
+
+test('a link that did not resolve is named, not silently null', () => {
+  // The failure mode this guards: an unresolved link leaves the column null,
+  // and a null is skipped by the renderer — so the one outcome worth seeing
+  // would look exactly like a field nobody filled in.
+  const record = {
+    id: 'recKtnJugR0TUc2D6',
+    fields: { 'Task Name': 'Orphan', 'DCW Projects': [{ id: 'recMISSING0000000' }] },
+  };
+  const out = renderPlan(spec('deliverables'), planRow(spec('deliverables'), record), record);
+  assert.match(out, /project_id = UNRESOLVED \(recMISSING0000000 not found in projects\)/);
+});

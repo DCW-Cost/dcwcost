@@ -516,18 +516,27 @@ async function recordAnomalies(
  */
 export function renderPlan(t: TableSpec, plan: RowPlan, record: AirtableRecord): string {
   const out: string[] = [`${t.key}  ${plan.airtableRecordId}`];
+  const links = new Map(plan.pendingLinks.map((l) => [l.column, l]));
   let nulls = 0;
 
   for (let i = 0; i < plan.columns.length; i++) {
     const value = plan.values[i];
     if (value === null || value === undefined) {
+      // A LINK THAT DID NOT RESOLVE IS NULL, and a null is invisible above.
+      // Said plainly: the one outcome worth seeing would look exactly like a
+      // field nobody filled in. It is named here instead.
+      const link = links.get(plan.columns[i]);
+      if (link) {
+        out.push(`  ${plan.columns[i]} = UNRESOLVED (${link.recordId} not found in ${link.linkTo})`);
+        continue;
+      }
       nulls++;
       continue;
     }
     const shown = Array.isArray(value)
       ? `[${value.map((v) => JSON.stringify(v)).join(', ')}]  (${value.length})`
       : JSON.stringify(value);
-    out.push(`  ${plan.columns[i]} = ${shown}`);
+    out.push(`  ${plan.columns[i]} = ${truncate(shown)}`);
   }
   out.push(`  (${nulls} of ${plan.columns.length} columns null)`);
 
@@ -539,6 +548,18 @@ export function renderPlan(t: TableSpec, plan: RowPlan, record: AirtableRecord):
   for (const issue of plan.issues) out.push(`  ANOMALY [${issue.kind}] ${issue.detail}`);
 
   return out.join('\n');
+}
+
+/**
+ * Long values are cut, because the point is whether a column is right rather
+ * than reading its contents. project_description runs to a thousand
+ * characters on a real project; five of those would be most of
+ * sync_runs.notes, and the columns worth checking would scroll past.
+ */
+const MAX_VALUE = 160;
+
+function truncate(value: string): string {
+  return value.length <= MAX_VALUE ? value : `${value.slice(0, MAX_VALUE)}… (${value.length} chars)`;
 }
 
 /**
