@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
-import { LOAD_ORDER, spec, TABLES } from './tables.ts';
+import { KNOWN_SKIPS, LOAD_ORDER, spec, TABLES } from './tables.ts';
 import { renderPlan, selectedTables } from './run.ts';
 import { parseSyncRequest } from './request.ts';
 import { handleSync } from '../../../netlify/functions/airtable-sync-background.mts';
@@ -826,4 +826,61 @@ test('the trigger awaits the hand-off rather than firing and forgetting', () => 
   assert.match(code, /await fetch\(/, 'the hand-off must be awaited');
   assert.match(code, /outcome = 'failed'/, 'a failed hand-off must close the row it opened');
   assert.match(code, /json\(502/, 'and must tell the caller');
+});
+
+// ------------------------ skipping what the database would refuse
+
+test('every counter including skipped has a column to land in', () => {
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const insert = src.slice(src.indexOf('insert into sync_run_tables'));
+  const columns = insert.slice(0, insert.indexOf(')')).match(/\w+/g) ?? [];
+  for (const counter of [
+    'read_from_airtable', 'inserted', 'updated', 'unchanged',
+    'would_insert_existing', 'unresolved_parents', 'anomalies', 'blocked', 'skipped',
+  ]) {
+    assert.ok(columns.includes(counter), `sync_run_tables insert must write ${counter}`);
+  }
+});
+
+test('required columns are read from the database, not declared', () => {
+  // A list in the field map would drift: a migration adding a NOT NULL
+  // column would not be reflected until someone remembered. That is the
+  // failure shape this project has hit six times in other forms.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  assert.match(src, /information_schema\.columns/);
+  assert.match(src, /is_nullable = 'NO' and column_default is null/);
+  // Columns WITH a default must be excluded, or records would be skipped
+  // over values Postgres was always going to supply.
+  assert.ok(!/is_nullable = 'NO'\s*\)/.test(src), 'the default clause must not be dropped');
+});
+
+test('the skip check runs after link resolution, not before', () => {
+  // deliverables.project_id is NOT NULL and is filled by resolution. Checked
+  // before that, every deliverable would look unwritable; checked after, only
+  // the ones whose project genuinely did not resolve do.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const resolve = src.indexOf('result.unresolvedParents++');
+  const skip = src.indexOf('const required = await requiredColumns');
+  assert.ok(resolve > 0 && skip > resolve, 'the skip pass must come after resolution');
+});
+
+test('the non-billable bucket records why skipping it defers a problem', () => {
+  // Skipping recXCLgbkVXQtgUlk is not cleanup. It is a deliberate structure
+  // with 19,566 hours on it, and the cost lands when time_entries syncs.
+  const note = KNOWN_SKIPS['recXCLgbkVXQtgUlk'];
+  assert.ok(note, 'the bucket must carry an explanation');
+  assert.match(note, /19,566/, 'says what is at stake');
+  assert.match(note, /by design/i, 'says the missing link is intentional');
+  assert.match(note, /time_entries/, 'says when the cost lands');
+  assert.match(note, /NULLABLE/, 'says what the fix is');
+  assert.match(note, /lie about itself/, 'and why not a synthetic project');
+});
+
+test('a required column nothing maps fails the run before the first batch', () => {
+  // If the database requires a column the field map never writes, every
+  // insert fails. Saying so once, up front, beats discovering it 200 rows
+  // into a transaction.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  assert.match(src, /the field map never writes/);
+  assert.match(src, /throw new Error\(/);
 });
