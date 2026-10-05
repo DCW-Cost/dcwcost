@@ -228,15 +228,16 @@ test('a multiple select feeding a text column reports the values it drops', () =
   assert.equal(coerce('text', ['Healthcare']).problem, undefined, 'one value is not a loss');
 });
 
-test('a genuinely multi-valued select gets an array column, not the first value', () => {
-  // Secondary Category carries 2+ values on 66 of 100 sampled projects,
-  // often four to eight, so migration 009 made market text[]. sector (7%)
-  // and city (2%) stay scalar and log what they drop — that loss is rare
-  // enough to accept; two thirds is not.
-  const market = spec('projects').fields.find((f) => f.to === 'market');
-  assert.equal(market?.kind, 'text[]', 'market must be read as a list');
-  assert.equal(spec('projects').fields.find((f) => f.to === 'sector')?.kind, 'text');
-  assert.equal(spec('projects').fields.find((f) => f.to === 'city')?.kind, 'text');
+test('no mapped column is fed by a multiple select it cannot hold', () => {
+  // This started as "market is text[], sector and city stay scalar", on the
+  // measurement that 7% and 2% of projects carried a second value. The dry
+  // run turned those percentages into 116 and 37 real projects, each losing
+  // real data and each reported to someone who could not act on it. 012
+  // widened both, and the rule this test now states is the one that should
+  // have been stated first: a multiple select never feeds a scalar column.
+  for (const col of ['market', 'sector', 'city']) {
+    assert.equal(spec('projects').fields.find((f) => f.to === col)?.kind, 'text[]', col);
+  }
 });
 
 test('a year bucket is carried as text, never coerced into a date', () => {
@@ -302,8 +303,58 @@ test('the scalar columns the join tables replaced are gone from the map', () => 
     assert.ok(!spec('deliverables').fields.some((f) => f.to === gone), `deliverables.${gone}`);
   }
   assert.ok(!spec('projects').fields.some((f) => f.to === 'client_contact_id'));
+  // 012 dropped projects.client_id for project_client_companies.
+  assert.ok(!spec('projects').fields.some((f) => f.to === 'client_id'));
   // Next Action Owner is single-valued in Airtable and stays a scalar FK.
   assert.ok(spec('deliverables').fields.some((f) => f.to === 'next_action_owner_id'));
+});
+
+test('the client company is a join, and the same field feeds only one of them', () => {
+  const j = spec('projects').joins?.find((x) => x.table === 'project_client_companies');
+  assert.equal(j?.from, 'Link to Client Company (Add Here)');
+  assert.equal(j?.parentColumn, 'project_id');
+  assert.equal(j?.childColumn, 'client_company_id');
+  assert.equal(j?.linkTo, 'client_companies');
+  // The field moved from `fields` to `joins`. Leaving it in both would write
+  // the first company to a column 012 dropped, and the upsert would fail on
+  // every project — loud, but after a full Airtable read.
+  const froms = spec('projects').joins!.map((x) => x.from);
+  assert.equal(new Set(froms).size, froms.length, 'one join per Airtable field');
+});
+
+test('client_companies loads before projects, so the join can resolve', () => {
+  assert.ok(LOAD_ORDER.indexOf('client_companies') < LOAD_ORDER.indexOf('projects'));
+});
+
+// ------------------------------------------------- 012's widened columns
+
+test('sector and city take every value now, with nothing reported', () => {
+  // 116 projects carry a second sector and 37 a second city. Each one used
+  // to be a kept-the-first anomaly: real data loss, reported honestly, and
+  // unfixable by whoever read the report, because the answer was a column
+  // type. 012 widened both.
+  for (const col of ['sector', 'city', 'market']) {
+    assert.equal(spec('projects').fields.find((f) => f.to === col)?.kind, 'text[]', col);
+  }
+
+  const plan = planRow(spec('projects'), {
+    id: 'recABCDEFGHIJKLMN',
+    fields: {
+      'Project Title': 'Two of each',
+      'Primary Category': ['Healthcare', 'Education'],
+      'Location (City, State)': ['Portland, OR', 'Vancouver, WA'],
+    },
+  });
+  assert.deepEqual(plan.values[plan.columns.indexOf('sector')], ['Healthcare', 'Education']);
+  assert.deepEqual(plan.values[plan.columns.indexOf('city')], ['Portland, OR', 'Vancouver, WA']);
+  assert.deepEqual(plan.issues, [], 'nothing dropped, so nothing to report');
+});
+
+test('region stays scalar and unmapped', () => {
+  // 012 widened sector and city and deliberately left region alone: it is
+  // single-valued in Airtable and nothing feeds it yet. A map that grew a
+  // region entry would need the column type checked first.
+  assert.ok(!spec('projects').fields.some((f) => f.to === 'region'));
 });
 
 test('a record becomes one planned join per populated link field', () => {
@@ -367,9 +418,12 @@ test('an anomaly says whether a value survived, not always "left null"', () => {
   // number that would not parse and false of a multi-value that kept its
   // first — and the second is most of them. A report that misdescribes
   // itself reads as informative and is worse than none.
-  const kept = planRow(spec('projects'), {
+  // Since 012 no mapped SELECT can reach this path — every multi-valued one
+  // feeds an array. A multi-valued LINK still can: the column holds one uuid
+  // and a task with two projects is a question, not a tie to break.
+  const kept = planRow(spec('deliverables'), {
     id: 'recABCDEFGHIJKLMN',
-    fields: { 'Primary Category': ['Community', 'Parks'] },
+    fields: { 'DCW Projects': ['recAAAAAAAAAAAAAA', 'recBBBBBBBBBBBBBB'] },
   });
   assert.match(kept.issues[0].detail, /The first value was written/);
 

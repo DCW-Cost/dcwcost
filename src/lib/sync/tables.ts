@@ -220,24 +220,31 @@ export const TABLES: readonly TableSpec[] = [
     restrictUpdateTo: "projects.airtable_record_id is not null",
     // 287 of 1,643 projects name more than one client contact — 17%, the
     // highest multi-value rate in phase one. Migration 011.
+    //
+    // The client company join is 012's, and it is here rather than as a
+    // `client_id` column because 30 projects name two companies. A scalar
+    // column had to pick one of them, and the 30 were checked by hand: all
+    // real, joint ventures and parent/subsidiary pairs, not data entry.
     joins: [
       { from: 'Client Contact (Linked)', table: 'project_client_contacts',
         parentColumn: 'project_id', childColumn: 'contact_id', linkTo: 'contacts' },
+      { from: 'Link to Client Company (Add Here)', table: 'project_client_companies',
+        parentColumn: 'project_id', childColumn: 'client_company_id', linkTo: 'client_companies' },
     ],
     fields: [
       { from: 'Project Title', to: 'name', kind: 'text' },
-      { from: 'Link to Client Company (Add Here)', to: 'client_id', kind: 'link', linkTo: 'client_companies' },
-      // sector, market and city are single `text` columns fed from Airtable
-      // MULTIPLE selects. Keeping the first is all a text column can do; the
-      // coercion reports every time it drops one, so the loss is counted in
-      // sync_anomalies rather than invisible.
-      { from: 'Primary Category', to: 'sector', kind: 'text' },
-      // Now text[] (migration 009), because Secondary Category is genuinely
-      // multi-valued: 66 of 100 sampled projects carry two or more, often
-      // four to eight. sector and city stay scalar — 7% and 2% — and the
-      // coercion reports every value it drops there.
+      // sector, market and city are all text[] as of 012. They were scalar
+      // because the first measurement said 7% and 2% of projects carried a
+      // second value, which sounded like noise worth absorbing — until the
+      // dry run put a number on it: 116 projects would have lost a sector and
+      // 37 a city, every one of them reported as an anomaly nobody could act
+      // on, because the fix was a column type and not a data correction.
+      { from: 'Primary Category', to: 'sector', kind: 'text[]' },
+      // Secondary Category was never scalar: 66 of 100 sampled projects carry
+      // two or more, often four to eight. It went to text[] in 009, which is
+      // what made the other two look like the exception rather than the rule.
       { from: 'Secondary Category', to: 'market', kind: 'text[]' },
-      { from: 'Location (City, State)', to: 'city', kind: 'text' },
+      { from: 'Location (City, State)', to: 'city', kind: 'text[]' },
       { from: 'Delivery Method', to: 'delivery_method', kind: 'text' },
       // Construction Start Date is NOT MAPPED, and that is deliberate.
       //
