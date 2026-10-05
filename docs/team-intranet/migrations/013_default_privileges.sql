@@ -169,7 +169,7 @@ $block$;
 --
 -- Uncomment and run as a second query. Every row should read exactly this:
 --
---   v_people_compensation insertable  NO
+--   v_pc structurally insertable      YES   <- correct; see STEP 2
 --   v_pc check option                 CASCADED
 --   v_pc reloptions                   security_invoker=false,check_option=cascaded
 --   v_pc authenticated privs          SELECT
@@ -182,6 +182,16 @@ $block$;
 --                                     — or none, if section 4's guarded block succeeded
 --   sync relations                    21
 --   reader relations                  13
+--
+-- "v_pc structurally insertable" READS YES AND YES IS CORRECT. It is not a
+-- failure and must not be read as one. information_schema's
+-- is_insertable_into reports whether a view is structurally auto-updatable —
+-- one base relation, no aggregates, plain column references — and a check
+-- option does not change any of that. The check option governs whether the
+-- WHERE is ENFORCED on insert, not whether an insert is structurally
+-- possible. The row is kept because it is the reason the check option is
+-- needed at all: the view stays insertable, so the guard has to live
+-- somewhere, and STEP 2 is what shows that it does.
 --
 -- "v_pc reloptions" must still contain security_invoker=false. 006 set that
 -- explicitly, so it is stored and printed rather than implied, and both
@@ -204,7 +214,13 @@ $block$;
 -- ambiguous without the cast. 012's copy is corrected in the same commit.
 --
 -- Every statement below was run against production before this file was
--- committed, which is the practice 012 did not follow and should have.
+-- committed, which is the practice 012 did not follow and should have. The
+-- STEP 2 probe was run there too, against the UNFIXED view, and correctly
+-- reported GUARD FAILED — a check that cannot fail proves nothing, so it was
+-- shown failing before it was trusted to pass. people held 0 rows before and
+-- after.
+--
+-- STEP 1 — the catalog query.
 -- ============================================================================
 --
 -- with pub as (select c.oid, c.relname, c.relkind from pg_class c
@@ -213,7 +229,7 @@ $block$;
 -- seqs as materialized (select c.oid, c.relname from pg_class c
 --                join pg_namespace n on n.oid = c.relnamespace
 --               where n.nspname='public' and c.relkind = 'S')
--- select 'v_people_compensation insertable' as item,
+-- select 'v_pc structurally insertable' as item,
 --        (select is_insertable_into from information_schema.views
 --          where table_schema='public' and table_name='v_people_compensation') as value
 -- union all select 'v_pc check option',
@@ -272,5 +288,60 @@ $block$;
 --          where has_any_column_privilege('cost_reader', oid,'SELECT')
 --             or has_any_column_privilege('cost_reader', oid,'INSERT')
 --             or has_any_column_privilege('cost_reader', oid,'UPDATE'));
+--
+-- ============================================================================
+--
+-- ============================================================================
+-- STEP 2 — the guard probe
+--
+-- The only check here that tests BEHAVIOUR rather than catalogue state, and
+-- the only one that can tell whether the check option actually holds. No
+-- query over pg_catalog can: every column it could read says the same thing
+-- before and after the fix.
+--
+-- IT ATTEMPTS A REAL INSERT INTO people, THROUGH THE VIEW. It is safe to run
+-- on production, and the safety is structural rather than careful: a DO block
+-- is one statement, so the RAISE on the failure path aborts it and takes the
+-- probe row with it. There is no path on which a row persists — if the guard
+-- holds, the insert was rejected and there is nothing to undo; if the guard
+-- is open, the insert succeeded and the RAISE rolls it back.
+--
+-- Run it as postgres, as the SQL editor does. auth.uid() is null there, so
+-- is_admin() is false and the probe is a non-admin insert. Postgres owns the
+-- view, so the REVOKE does not apply to it — which is the point: this tests
+-- the structural half on its own, with the grant half deliberately bypassed.
+-- That is the same thing as re-granting INSERT and trying again.
+--
+-- Expected after 013:  NOTICE  guard holds, rejected by: check option
+-- Before 013:          ERROR   GUARD FAILED: (insert was not rejected)
+--
+-- An INCONCLUSIVE message means the insert was refused for some unrelated
+-- reason — a new NOT NULL column on people, most likely — and the probe
+-- tested nothing. Fix the probe rather than recording a pass.
+-- ============================================================================
+--
+-- do $guard$
+-- declare
+--   blocked boolean := false;
+--   why     text    := '(insert was not rejected)';
+-- begin
+--   begin
+--     insert into public.v_people_compensation
+--       (id, airtable_record_id, name, email, status, hourly_profit_rate)
+--     values (gen_random_uuid(), 'recGUARDPROBE000', 'guard probe',
+--             'probe@example.invalid', 'active', 999);
+--   exception
+--     when with_check_option_violation then blocked := true; why := 'check option';
+--     when insufficient_privilege      then blocked := true; why := 'no INSERT privilege';
+--     when others                      then blocked := false;
+--       why := 'INCONCLUSIVE: rejected for an unrelated reason (' || sqlerrm || ')';
+--   end;
+--
+--   if not blocked then
+--     raise exception 'GUARD FAILED: % -- the probe row is rolled back with this error', why;
+--   end if;
+--   raise notice 'guard holds, rejected by: %', why;
+-- end
+-- $guard$;
 --
 -- ============================================================================
