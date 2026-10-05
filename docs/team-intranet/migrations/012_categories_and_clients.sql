@@ -358,7 +358,10 @@ create policy project_client_companies_sync_upd  on project_client_companies for
 -- their own privileges and would not appear under any of the above. Five
 -- instances of the same shape is enough to stop writing a narrower version
 -- each time. Copy these three rows into every migration that grants or
--- revokes anything.
+-- revokes anything — and RUN them against the database before committing,
+-- which is how the ::text cast below came to be missing. relkind is a
+-- "char", so the concatenation is ambiguous without it and the whole query
+-- aborts. It shipped here unrun; 013 was run first.
 --
 -- `reader relations` moves 12 → 13: cost_reader gains v_observations, which
 -- it could read before only because the view carried default privileges. Now
@@ -402,7 +405,7 @@ create policy project_client_companies_sync_upd  on project_client_companies for
 --                     and has_column_privilege('airtable_sync', t,'synced_at','UPDATE'))
 --           from all_join)::text
 -- union all select 'anon on ANY relation',
---        coalesce((select string_agg(c.relname || ' (' || c.relkind || ')', ', ' order by c.relname)
+--        coalesce((select string_agg(c.relname || ' (' || c.relkind::text || ')', ', ' order by c.relname)
 --                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
 --                   where n.nspname = 'public' and c.relkind in ('r','v','m','p','f')
 --                     and (has_table_privilege('anon', c.oid, 'SELECT')
