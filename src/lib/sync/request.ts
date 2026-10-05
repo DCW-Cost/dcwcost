@@ -33,6 +33,8 @@ export interface ParsedRequest {
   showRecords?: string[];
   showLimit?: number;
   tables?: TableKey[];
+  /** Set by the trigger route, which opened the run row to return its id. */
+  runId?: string;
 }
 
 /** Non-empty strings only, or undefined. Shared by showRecords and tables. */
@@ -64,5 +66,10 @@ export function parseSyncRequest(body: unknown): ParsedRequest {
     // a misspelling out instead would sync fewer tables than were asked for
     // and report success.
     tables: stringList(b.tables) as TableKey[] | undefined,
+    // Only ever sent by the trigger route, never by a person. A caller who
+    // supplies one is adopting a row they are claiming to have opened; the
+    // background function is behind the same secret, so this is no wider a
+    // trust than the rest of the body.
+    runId: typeof b.runId === 'string' && b.runId.trim() !== '' ? b.runId.trim() : undefined,
   };
 }

@@ -50,6 +50,15 @@ export interface SyncOptions {
    */
   tables?: readonly TableKey[];
   /**
+   * A run row opened by the caller, adopted instead of opening a new one.
+   *
+   * The synchronous trigger at /api/sync/trigger opens the row so it can
+   * return the id in its response — which is the whole point of it existing.
+   * Without this, the background function would open a second row and the id
+   * the caller was given would stay empty forever.
+   */
+  runId?: string;
+  /**
    * Airtable record ids, or any text to match against a record's field
    * values. Every match has its planned row rendered in full — see
    * renderPlan below for why counts are not enough.
@@ -93,8 +102,11 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
   const selected = selectedTables(opts.tables);
   const skipped = LOAD_ORDER.filter((k) => !selected.includes(k));
 
-  const runId = await openRun(db, opts.dryRun, selected);
-  log(`run ${runId} opened${opts.dryRun ? ' as a dry run' : ''} over ${selected.join(', ')}`);
+  const runId = opts.runId ?? (await openRun(db, opts.dryRun, selected));
+  log(
+    `run ${runId} ${opts.runId ? 'adopted' : 'opened'}${opts.dryRun ? ' as a dry run' : ''} ` +
+      `over ${selected.join(', ')}`
+  );
 
   /** airtable_record_id → mirror uuid, per table, for resolving links. */
   const keys = new Map<TableKey, Map<string, string>>();
