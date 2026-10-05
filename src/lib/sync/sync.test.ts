@@ -525,4 +525,25 @@ test('an unknown table name fails the run rather than syncing less', () => {
   // for and report success, which is the failure this whole option exists
   // to avoid on a first real run.
   assert.throws(() => selectedTables(['peoples' as never]), /unknown table\(s\): peoples/);
+test('the text match only sees fields the table maps', () => {
+  // The failure this guards is the one the first dry run produced: Airtable
+  // returns every field including lookups the map ignores, so a person's
+  // record carries the name of every project they have touched. "Oregon Zoo"
+  // matched two staff and five Metro tasks that have the phrase in no column
+  // the mirror stores.
+  const record = {
+    id: 'recAAAAAAAAAAAAAA',
+    fields: {
+      'Task Name': 'Site Visit',
+      // Not in the deliverables map: a lookup Airtable sends anyway.
+      'Projects Lookup': ['Oregon Zoo Entry Plaza', 'Blue Lake Park'],
+    },
+  };
+  const t = spec('deliverables');
+  const plan = planRow(t, record);
+  const out = renderPlan(t, plan, record);
+  // The unmapped lookup must not appear in what would be written, which is
+  // the same reason it must not drive a match.
+  assert.ok(!out.includes('Oregon Zoo'), 'an unmapped lookup is not written');
+  assert.match(out, /task_name = "Site Visit"/);
 });
