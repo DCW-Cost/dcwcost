@@ -809,3 +809,21 @@ test('machine endpoints are exempt from the session guard on purpose', () => {
   const intranetAt = mw.indexOf('if (!isIntranet(path)) return next();');
   assert.ok(machineAt > 0 && machineAt < intranetAt, 'the exemption must be checked first');
 });
+
+test('the trigger awaits the hand-off rather than firing and forgetting', () => {
+  // `void fetch(...)` in a serverless function is cancelled the moment the
+  // response is returned, because the instance is frozen. The first run
+  // through this route left a row in `running` with nothing written.
+  //
+  // The reasoning that produced it was the error worth guarding: awaiting
+  // the POST was confused with awaiting the fifteen minutes of work. Netlify
+  // answers the POST in milliseconds and runs the function afterwards.
+  const src = readFileSync(new URL('../../pages/api/sync/trigger.ts', import.meta.url), 'utf8');
+  // Comments stripped first: this file explains the bug by name, and a
+  // check that cannot tell prose from code would fail on the explanation.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/void\s+fetch\(/.test(code), 'the hand-off must not be fire-and-forget');
+  assert.match(code, /await fetch\(/, 'the hand-off must be awaited');
+  assert.match(code, /outcome = 'failed'/, 'a failed hand-off must close the row it opened');
+  assert.match(code, /json\(502/, 'and must tell the caller');
+});

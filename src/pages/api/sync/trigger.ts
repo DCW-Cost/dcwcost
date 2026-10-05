@@ -19,15 +19,22 @@
  *   502  the database refused the run row     — says so, nothing started
  *   202  { runId }                            — a row exists; go look at it
  *
- * The hand-off POST is deliberately NOT awaited to completion — the point of
- * the background function is the fifteen-minute budget, and waiting for it
- * here would hit the SSR timeout instead. So there is one failure this
- * cannot report: the hand-off itself failing after the row is opened.
+ * THE HAND-OFF IS AWAITED, and the first version of this file was wrong to
+ * reason otherwise. It argued that awaiting would hit the SSR timeout
+ * because the background function runs for fifteen minutes — conflating the
+ * POST that ENQUEUES the work with the work itself. Netlify answers that
+ * POST with 202 in milliseconds and runs the function afterwards, so
+ * awaiting costs nothing and the fifteen minutes are never on this request.
  *
- * THAT FAILURE IS SAFE BY CONSTRUCTION RATHER THAN BY CARE. It leaves a row
- * with finished_at null, which is visible in one query, and
- * sweep_missing_from_airtable() already refuses to act on a run that never
- * finished. An unfinished row is the correct description of what happened.
+ * Not awaiting cost everything instead: `void fetch(...)` in a serverless
+ * function is cancelled the moment the response is returned, because the
+ * instance is frozen. The very first run through this route left a row in
+ * `running` with no tables and nothing written — the failure mode this
+ * comment used to describe as acceptable, arriving immediately.
+ *
+ * So the hand-off is awaited, and if it fails the run row is closed as
+ * failed with the reason and the caller gets a 502. There is no longer a
+ * silent path.
  *
  * NOT BEHIND THE SESSION GUARD, deliberately: see MACHINE_PATHS in
  * src/middleware.ts. This is called by a scheduler or by hand with a shared
@@ -112,19 +119,34 @@ export const POST: APIRoute = async ({ request, url }) => {
     });
   }
 
-  // Fire and do not await. The background function owns the long work and
-  // the fifteen-minute budget; waiting here would hit the SSR timeout and
-  // report a failure for a run that is proceeding normally.
+  // Awaited. Netlify answers this POST with 202 as soon as it has accepted
+  // the invocation; the fifteen minutes happen after, on its own clock.
   const target = new URL('/.netlify/functions/airtable-sync-background', url.origin);
-  void fetch(target, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-sync-secret': secret! },
-    body: JSON.stringify({ ...opts, runId }),
-  }).catch((err) => {
-    // Logged, not returned: by now the caller has their run id and the row
-    // is the record. A row left running is the honest description.
-    console.error(`[sync] hand-off to the background function failed for run ${runId}:`, err);
-  });
+  try {
+    const handoff = await fetch(target, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-sync-secret': secret! },
+      body: JSON.stringify({ ...opts, runId }),
+    });
+    if (!handoff.ok) throw new Error(`background function answered ${handoff.status}`);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    // Close the row we opened. Leaving it in `running` would describe a run
+    // that is still going, and nothing is.
+    await withDb(dbUrl!, (db) =>
+      db.query(
+        `update sync_runs set finished_at = now(), outcome = 'failed',
+                notes = coalesce(notes,'') || $2
+          where id = $1 and finished_at is null`,
+        [runId, `
+${new Date().toISOString()} hand-off to the background function failed: ${reason}`]
+      )
+    ).catch(() => {
+      // Nothing further to try. The 502 below is still accurate.
+      console.error(`[sync] run ${runId} could not be closed after a failed hand-off`);
+    });
+    return json(502, { error: 'the sync could not be started', runId, detail: reason });
+  }
 
   return json(202, {
     runId,
