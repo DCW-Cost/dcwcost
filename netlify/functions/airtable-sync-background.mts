@@ -32,14 +32,50 @@
  */
 import type { Context } from '@netlify/functions';
 import { withDb } from '../../src/lib/sync/db.ts';
-import { runSync } from '../../src/lib/sync/run.ts';
+import { runSync, type SyncOptions, type TableResult } from '../../src/lib/sync/run.ts';
 import { parseSyncRequest } from '../../src/lib/sync/request.ts';
 
-export default async (req: Request, _context: Context) => {
-  const dbUrl = Netlify.env.get('AIRTABLE_SYNC_DATABASE_URL');
-  const apiKey = Netlify.env.get('AIRTABLE_API_KEY');
-  const baseId = Netlify.env.get('AIRTABLE_BASE_ID');
-  const secret = Netlify.env.get('SYNC_TRIGGER_SECRET');
+/**
+ * THE ENVIRONMENT AND THE RUNNER ARE ARGUMENTS, NOT GLOBALS.
+ *
+ * They used to be `Netlify.env.get(...)` read inline, which made this
+ * handler impossible to call from a test — the global does not exist in the
+ * test runner — so everything in here was unverified by construction. That
+ * is how a shadowed variable killed every request for an hour while each one
+ * answered 202.
+ *
+ * With both injected, a test can call `handleSync` with a fake env and a
+ * fake runner and assert the thing that actually matters: that what the
+ * handler parsed is what the runner receives. "Does the module import" was
+ * never going to catch it.
+ */
+export interface SyncEnv {
+  AIRTABLE_SYNC_DATABASE_URL?: string;
+  AIRTABLE_API_KEY?: string;
+  AIRTABLE_BASE_ID?: string;
+  SYNC_TRIGGER_SECRET?: string;
+}
+
+export type SyncRunner = (
+  dbUrl: string,
+  opts: Omit<SyncOptions, 'log'> & { log: (line: string) => void }
+) => Promise<{ runId: string; tables: TableResult[] }>;
+
+const realRunner: SyncRunner = (dbUrl, opts) => withDb(dbUrl, (db) => runSync(db, opts));
+
+export default async (req: Request, _context: Context) =>
+  handleSync(req, {
+    AIRTABLE_SYNC_DATABASE_URL: Netlify.env.get('AIRTABLE_SYNC_DATABASE_URL'),
+    AIRTABLE_API_KEY: Netlify.env.get('AIRTABLE_API_KEY'),
+    AIRTABLE_BASE_ID: Netlify.env.get('AIRTABLE_BASE_ID'),
+    SYNC_TRIGGER_SECRET: Netlify.env.get('SYNC_TRIGGER_SECRET'),
+  });
+
+export async function handleSync(req: Request, e: SyncEnv, run: SyncRunner = realRunner) {
+  const dbUrl = e.AIRTABLE_SYNC_DATABASE_URL;
+  const apiKey = e.AIRTABLE_API_KEY;
+  const baseId = e.AIRTABLE_BASE_ID;
+  const secret = e.SYNC_TRIGGER_SECRET;
 
   const missing = Object.entries({
     AIRTABLE_SYNC_DATABASE_URL: dbUrl,
@@ -74,14 +110,12 @@ export default async (req: Request, _context: Context) => {
     // `results` rather than `tables`: runSync returns { runId, tables }, and
     // naming it `tables` here is what shadowed the parsed option and took the
     // function down. See src/lib/sync/request.ts.
-    const { runId, tables: results } = await withDb(dbUrl!, (db) =>
-      runSync(db, {
-        apiKey: apiKey!,
-        baseId: baseId!,
-        ...opts,
-        log: (line) => console.log(`[sync] ${line}`),
-      })
-    );
+    const { runId, tables: results } = await run(dbUrl!, {
+      apiKey: apiKey!,
+      baseId: baseId!,
+      ...opts,
+      log: (line) => console.log(`[sync] ${line}`),
+    });
 
     for (const t of results) {
       console.log(

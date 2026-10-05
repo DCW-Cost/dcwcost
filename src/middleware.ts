@@ -21,6 +21,23 @@ const PUBLIC_PATHS = [
   '/teamintranet/auth/',
 ];
 
+/**
+ * MACHINE ENDPOINTS, DELIBERATELY NOT BEHIND THE SESSION GUARD.
+ *
+ * These are invoked by a scheduler or by hand with a shared secret, never by
+ * a browser carrying a session, so a session check would reject every real
+ * caller. Each one authenticates itself on its own secret and MUST keep
+ * doing so — the exemption is the reason there is nothing else in front.
+ *
+ * Today the guard only covers /teamintranet, so these paths pass through
+ * without this list existing. The list exists anyway, because that is an
+ * accident waiting to be corrected: the day someone widens the guard to the
+ * whole site, this is what tells them these routes are not an oversight, and
+ * the test in sync.test.ts is what fails if they are swept up regardless.
+ */
+const MACHINE_PATHS = ['/api/sync/trigger'];
+
+const isMachine = (p: string) => MACHINE_PATHS.includes(p);
 const isIntranet = (p: string) => p === '/teamintranet' || p.startsWith('/teamintranet/');
 const isPublic = (p: string) => PUBLIC_PATHS.some((allowed) => p.startsWith(allowed));
 
@@ -44,6 +61,9 @@ function warnGateClosedOnce(raw: string | undefined): void {
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const path = context.url.pathname;
+  // Checked BEFORE the intranet test rather than relying on the test not
+  // matching. If the guard is ever widened, these stay exempt by intent.
+  if (isMachine(path)) return next();
   if (!isIntranet(path)) return next();
 
   // The whole area is switched off unless explicitly enabled, so that an

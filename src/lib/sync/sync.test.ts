@@ -18,6 +18,7 @@ import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoin
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
 import { renderPlan, selectedTables } from './run.ts';
 import { parseSyncRequest } from './request.ts';
+import { handleSync } from '../../../netlify/functions/airtable-sync-background.mts';
 import { readFileSync } from 'node:fs';
 
 // ---------------------------------------------------------------- coercion
@@ -714,4 +715,97 @@ test('nothing the handler passes to runSync is named `tables`', () => {
     "runSync's returned `tables` must be renamed on destructuring"
   );
   assert.ok(src.includes('parseSyncRequest'), 'body parsing stays in the tested module');
+});
+
+// ------------------------------ the handler, actually invoked
+
+const ENV = {
+  AIRTABLE_SYNC_DATABASE_URL: 'postgres://airtable_sync@example/db',
+  AIRTABLE_API_KEY: 'key',
+  AIRTABLE_BASE_ID: 'appNKOkUcvzzX3BIw',
+  SYNC_TRIGGER_SECRET: 'sssssssssssssssssssssssssssssss1',
+};
+
+function post(body: unknown, secret = ENV.SYNC_TRIGGER_SECRET) {
+  return new Request('https://example.test/.netlify/functions/airtable-sync-background', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-sync-secret': secret },
+    body: JSON.stringify(body),
+  });
+}
+
+/** Records what the handler passed, and never touches a database. */
+function spy() {
+  const seen: any[] = [];
+  const run = async (dbUrl: string, opts: any) => {
+    seen.push({ dbUrl, opts });
+    return { runId: 'run-1', tables: [] };
+  };
+  return { seen, run };
+}
+
+test('the handler passes through what it parsed', async () => {
+  // THE TEST THAT WAS MISSING. Not "does the module load" — it loaded fine
+  // while every request died — but "does what the handler parsed reach the
+  // runner". The shadowed `tables` failed exactly here.
+  const s = spy();
+  await handleSync(post({ dryRun: true, tables: ['people', 'subconsultants'], showLimit: 2 }), ENV, s.run);
+  assert.equal(s.seen.length, 1, 'the runner was called');
+  assert.deepEqual(s.seen[0].opts.tables, ['people', 'subconsultants']);
+  assert.equal(s.seen[0].opts.dryRun, true);
+  assert.equal(s.seen[0].opts.showLimit, 2);
+  assert.equal(s.seen[0].opts.baseId, ENV.AIRTABLE_BASE_ID);
+  assert.equal(s.seen[0].dbUrl, ENV.AIRTABLE_SYNC_DATABASE_URL);
+});
+
+test('the handler adopts a run id the trigger opened', async () => {
+  const s = spy();
+  await handleSync(post({ runId: 'abc-123', tables: ['people'] }), ENV, s.run);
+  assert.equal(s.seen[0].opts.runId, 'abc-123', 'otherwise a second row opens and the caller\'s id stays empty');
+});
+
+test('a bad secret runs nothing', async () => {
+  const s = spy();
+  await handleSync(post({ tables: ['people'] }, 'wrong'), ENV, s.run);
+  assert.equal(s.seen.length, 0);
+});
+
+test('a missing env var runs nothing', async () => {
+  for (const key of Object.keys(ENV)) {
+    const s = spy();
+    await handleSync(post({ tables: ['people'] }), { ...ENV, [key]: undefined }, s.run);
+    assert.equal(s.seen.length, 0, `${key} unset must stop the run`);
+  }
+});
+
+test('a GET runs nothing', async () => {
+  const s = spy();
+  const req = new Request('https://example.test/x', {
+    method: 'GET',
+    headers: { 'x-sync-secret': ENV.SYNC_TRIGGER_SECRET },
+  });
+  await handleSync(req, ENV, s.run);
+  assert.equal(s.seen.length, 0);
+});
+
+test('a thrown run is caught, not left unhandled', async () => {
+  // runSync closes the row as failed itself; the handler must not add an
+  // unhandled rejection on top, which on Netlify kills the invocation
+  // before the log line is written.
+  const boom: any = async () => {
+    throw new Error('database on fire');
+  };
+  await handleSync(post({ tables: ['people'] }), ENV, boom);
+});
+
+test('machine endpoints are exempt from the session guard on purpose', () => {
+  // The guard only covers /teamintranet today, so /api/sync/trigger passes
+  // through whether or not anyone intended it. This asserts the intent is
+  // written down and checked first, so widening the guard later cannot
+  // silently break the trigger.
+  const mw = readFileSync(new URL('../../middleware.ts', import.meta.url), 'utf8');
+  assert.match(mw, /MACHINE_PATHS = \[[^\]]*'\/api\/sync\/trigger'/);
+  const machineAt = mw.indexOf('if (isMachine(path)) return next();');
+  const intranetAt = mw.indexOf('if (!isIntranet(path)) return next();');
+  assert.ok(machineAt > 0 && machineAt < intranetAt, 'the exemption must be checked first');
 });
