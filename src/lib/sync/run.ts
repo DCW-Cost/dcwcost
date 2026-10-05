@@ -147,7 +147,13 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
   // from the mirror is what keeps "unresolved" meaning "this parent is not
   // in Airtable either" rather than "this table was not in the scope".
   for (const key of skipped) {
-    if (opts.dryRun) continue;
+    // NO dryRun EXIT HERE. There used to be one, on the reasoning that a
+    // dry run should not touch the database — but it already does, to tell
+    // an insert from an update, and skipping this made every partial-scope
+    // dry run a lie. {"dryRun":true,"tables":["deliverables"]} reported 100
+    // of 100 records unresolved and skipped, because `projects` was out of
+    // scope so no project link could resolve and project_id was null on
+    // every row. The opposite of what the same scope does for real.
     const loaded = await loadKeyMap(db, key);
     keys.set(key, loaded);
     if (loaded.size) log(`${key}: not in scope; ${loaded.size} existing keys loaded for link resolution`);

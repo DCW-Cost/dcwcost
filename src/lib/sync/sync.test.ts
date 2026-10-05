@@ -939,3 +939,23 @@ test('measuring is off unless asked, because it costs memory to do', () => {
   assert.match(src, /if \(!opts\.measure\) return \(await res\.json\(\)\) as Page;/);
   assert.equal(parseSyncRequest({}).measure, false);
 });
+
+test('a dry run loads out-of-scope parent keys, like a real run does', () => {
+  // Observed: {"dryRun":true,"tables":["deliverables"]} reported 100 of 100
+  // records unresolved and skipped, because the loop that loads keys for
+  // out-of-scope tables exited early on dryRun. `projects` was not in scope,
+  // so no project link resolved, so project_id was null on every record and
+  // the skip pass removed all of them.
+  //
+  // A dry run that reports the opposite of the real run is worse than no dry
+  // run, because it is the thing being trusted before writing.
+  // Comments stripped first: the explanation below the loop quotes a JSON
+  // body containing braces, and slicing to the first `}` lands inside it.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  const loop = src.slice(src.indexOf('for (const key of skipped) {'));
+  const body = loop.slice(0, loop.indexOf('\n  }') + 1);
+  assert.ok(!/if \(opts\.dryRun\) continue;/.test(body), 'must not skip key loading on a dry run');
+  assert.match(body, /loadKeyMap\(db, key\)/);
+});
