@@ -205,6 +205,14 @@ async function syncTable(
     baseId: opts.baseId,
     limiter,
     maxRecords: opts.sampleSize,
+    measure: opts.measure,
+    onMeasure: (m) =>
+      log(
+        `${key}: PAGE ${m.records} records, ${m.bytes} bytes on the wire ` +
+          `(${Math.round(m.bytes / Math.max(m.records, 1))} avg/record); ` +
+          `per record min ${m.perRecordMin}, median ${m.perRecordMedian}, max ${m.perRecordMax}` +
+          (m.largestRecordId ? ` (largest: ${m.largestRecordId})` : '')
+      ),
   });
   log(`${key}: read ${records.length} from ${t.airtable}`);
 
