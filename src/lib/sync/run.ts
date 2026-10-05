@@ -462,17 +462,18 @@ async function recordTable(db: Db, runId: string, r: TableResult): Promise<void>
   await db.query(
     `insert into sync_run_tables
        (run_id, table_name, read_from_airtable, inserted, updated, unchanged,
-        would_insert_existing, unresolved_parents, anomalies)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        would_insert_existing, unresolved_parents, anomalies, blocked)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      on conflict (run_id, table_name) do update set
        read_from_airtable = excluded.read_from_airtable,
        inserted = excluded.inserted, updated = excluded.updated,
        unchanged = excluded.unchanged,
        would_insert_existing = excluded.would_insert_existing,
        unresolved_parents = excluded.unresolved_parents,
-       anomalies = excluded.anomalies`,
+       anomalies = excluded.anomalies,
+       blocked = excluded.blocked`,
     [runId, r.table, r.readFromAirtable, r.inserted, r.updated, r.unchanged,
-     r.wouldInsertExisting, r.unresolvedParents, r.anomalies]
+     r.wouldInsertExisting, r.unresolvedParents, r.anomalies, r.blocked]
   );
 }
 

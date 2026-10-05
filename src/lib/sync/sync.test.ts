@@ -17,6 +17,7 @@ import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
 import { renderPlan } from './run.ts';
+import { readFileSync } from 'node:fs';
 
 // ---------------------------------------------------------------- coercion
 
@@ -506,4 +507,81 @@ test('a link that did not resolve is named, not silently null', () => {
   };
   const out = renderPlan(spec('deliverables'), planRow(spec('deliverables'), record), record);
   assert.match(out, /project_id = UNRESOLVED \(recMISSING0000000 not found in projects\)/);
+});
+
+// ------------------------------------------- createdTime is not a field
+
+test('airtable_created_at comes from the record, not the date-only field', () => {
+  // The "Date Created" FIELD is a createdTime column formatted date-only:
+  // Airtable returns "2024-09-10" for a record created at 21:28:29Z. Stored
+  // as UTC midnight it renders in Pacific as the 9th — a day early on every
+  // row, with nothing in the data to reveal it.
+  const record = {
+    id: 'recW3IXuUePp2V1Bq',
+    createdTime: '2024-09-10T21:28:29.000Z',
+    fields: {
+      'Project Title': 'Oregon Zoo Entry Plaza',
+      // Still present in Airtable's response, and must now be ignored.
+      'Date Created': '2024-09-10',
+    },
+  };
+  const plan = planRow(spec('projects'), record);
+  const at = plan.values[plan.columns.indexOf('airtable_created_at')];
+  assert.equal(at, '2024-09-10T21:28:29.000Z');
+  assert.notEqual(at, '2024-09-10T00:00:00.000Z', 'midnight is the bug, not the value');
+});
+
+test('every table with a created column declares where it comes from', () => {
+  // Five tables carry one. None may go back to mapping the field: the field
+  // still exists in Airtable and still parses, so a reintroduced mapping
+  // would look correct and be a day early.
+  const expected: Record<string, string> = {
+    subconsultants: 'airtable_created_at',
+    client_companies: 'airtable_created_at',
+    contacts: 'added_on',
+    projects: 'airtable_created_at',
+    deliverables: 'airtable_created_at',
+  };
+  for (const [key, col] of Object.entries(expected)) {
+    assert.equal(spec(key as never).createdAtColumn, col, key);
+    assert.ok(
+      !spec(key as never).fields.some((f) => f.to === col),
+      `${key}.${col} must not also be mapped from a field`
+    );
+  }
+  assert.equal(spec('people').createdAtColumn, undefined, 'people has no created column');
+});
+
+test('a missing createdTime is an anomaly, not an Invalid Date', () => {
+  const plan = planRow(spec('projects'), {
+    id: 'recW3IXuUePp2V1Bq',
+    fields: { 'Project Title': 'No metadata' },
+  });
+  assert.equal(plan.values[plan.columns.indexOf('airtable_created_at')], null);
+  assert.equal(plan.issues.length, 0, 'absent metadata is empty, not malformed');
+
+  const bad = planRow(spec('projects'), {
+    id: 'recW3IXuUePp2V1Bq',
+    createdTime: 'not a timestamp',
+    fields: { 'Project Title': 'Bad metadata' },
+  });
+  assert.equal(bad.values[bad.columns.indexOf('airtable_created_at')], null);
+  assert.match(bad.issues[0].detail, /createdTime → airtable_created_at/);
+});
+
+test('every counter on TableResult has a column to land in', () => {
+  // blocked was counted for the whole life of the sync and had nowhere to
+  // go but the free-text summary, because sync_run_tables had no column for
+  // it. It read 0 on every dry run, which proves nothing: a dry run writes
+  // nothing, so nothing can be blocked. This asserts the insert names every
+  // counter, so the next one added cannot go missing the same way.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const insert = src.slice(src.indexOf('insert into sync_run_tables'));
+  const columns = insert.slice(0, insert.indexOf(')')).match(/\w+/g) ?? [];
+  for (const counter of [
+    'read_from_airtable', 'inserted', 'updated', 'unchanged',
+    'would_insert_existing', 'unresolved_parents', 'anomalies', 'blocked',
+  ]) {
+    assert.ok(columns.includes(counter), `sync_run_tables insert must write ${counter}`);
+  }
 });

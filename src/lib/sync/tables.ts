@@ -107,6 +107,24 @@ export interface TableSpec {
   /** Columns set to a constant when the row is created. */
   insertConstants?: Readonly<Record<string, string>>;
   /**
+   * The column fed by the record's `createdTime`, which is NOT a field.
+   *
+   * Airtable returns createdTime as record metadata, beside `fields` rather
+   * than inside it, so no `from` could ever name it. This is declared on the
+   * table because there is nowhere else it could live, not because a special
+   * case was easier.
+   *
+   * It replaces mapping the "Date Created" / "Added On" FIELDS, which are
+   * createdTime columns formatted date-only. Those return "2024-09-10" for a
+   * record created at 2024-09-10T21:28:29Z, so the field stored UTC midnight
+   * and rendered in Pacific as the 9th — a day early, on every row, with
+   * nothing in the data to reveal it. The metadata carries the real instant.
+   *
+   * Updatable rather than insert-only on purpose: a mirror already holding
+   * the midnight values corrects itself on the next sync.
+   */
+  createdAtColumn?: string;
+  /**
    * Added to the ON CONFLICT ... DO UPDATE, so the sync never updates a row it
    * does not own. Only the two tables it shares with the portal and the
    * reader need this.
@@ -158,6 +176,7 @@ export const TABLES: readonly TableSpec[] = [
   {
     key: 'subconsultants',
     airtable: 'Subconsultants',
+    createdAtColumn: 'airtable_created_at',
     fields: [
       { from: 'Company Name', to: 'company_name', kind: 'text' },
       { from: 'Client ID', to: 'client_code', kind: 'text' },
@@ -166,13 +185,13 @@ export const TABLES: readonly TableSpec[] = [
       { from: 'Address', to: 'address', kind: 'text' },
       { from: 'Company Billing Instructions', to: 'company_billing_instructions', kind: 'text' },
       { from: 'Fee Proposal Notes', to: 'fee_proposal_notes', kind: 'text' },
-      { from: 'Created', to: 'airtable_created_at', kind: 'timestamptz' },
     ],
   },
 
   {
     key: 'client_companies',
     airtable: 'Client Company List',
+    createdAtColumn: 'airtable_created_at',
     fields: [
       { from: 'Company Name', to: 'company_name', kind: 'text' },
       { from: 'Client ID', to: 'client_code', kind: 'text' },
@@ -189,13 +208,13 @@ export const TABLES: readonly TableSpec[] = [
       { from: 'Fee Proposal Notes', to: 'fee_proposal_notes', kind: 'text' },
       { from: 'Client Lead', to: 'client_lead_id', kind: 'link', linkTo: 'people' },
       { from: 'Client Lead Backup', to: 'client_lead_backup_id', kind: 'link', linkTo: 'people' },
-      { from: 'Created', to: 'airtable_created_at', kind: 'timestamptz' },
     ],
   },
 
   {
     key: 'contacts',
     airtable: 'Contacts',
+    createdAtColumn: 'added_on',
     fields: [
       { from: 'Contact (First Last)', to: 'contact_name', kind: 'text' },
       { from: 'Contact Email', to: 'contact_email', kind: 'text' },
@@ -210,13 +229,13 @@ export const TABLES: readonly TableSpec[] = [
       // can have two.
       { from: 'Company Link (Primary Key)', to: 'client_company_id', kind: 'link', linkTo: 'client_companies' },
       { from: 'Link to Subconsultant Company', to: 'subconsultant_id', kind: 'link', linkTo: 'subconsultants' },
-      { from: 'Added On', to: 'added_on', kind: 'timestamptz' },
     ],
   },
 
   {
     key: 'projects',
     airtable: 'New Project Entry',
+    createdAtColumn: 'airtable_created_at',
     restrictUpdateTo: "projects.airtable_record_id is not null",
     // 287 of 1,643 projects name more than one client contact — 17%, the
     // highest multi-value rate in phase one. Migration 011.
@@ -285,7 +304,6 @@ export const TABLES: readonly TableSpec[] = [
       { from: 'Project Descriptions for Resume', to: 'project_descriptions_for_resume', kind: 'text' },
       { from: 'Project Owner', to: 'project_owner', kind: 'text[]' },
       { from: 'Scope Categories', to: 'scope_categories', kind: 'text[]' },
-      { from: 'Date Created', to: 'airtable_created_at', kind: 'timestamptz' },
     ],
     // gross_sf is NOT mapped from Airtable. It is the universal normaliser
     // (PLAN §5.3) and Airtable has a building area for only about 18% of
@@ -295,6 +313,7 @@ export const TABLES: readonly TableSpec[] = [
   {
     key: 'deliverables',
     airtable: 'DCW Project Tasks',
+    createdAtColumn: 'airtable_created_at',
     insertConstants: { source: 'airtable' },
     // Project Manager is multi-valued on 380 of 3,085 tasks (12%) and Project
     // Support likewise, so both are join tables rather than scalar columns —
@@ -406,7 +425,6 @@ export const TABLES: readonly TableSpec[] = [
       { from: '*DCW Estimated Project Cost', to: 'dcw_estimated_project_cost', kind: 'numeric' },
       { from: '*Project Folder Link', to: 'project_folder_link', kind: 'text' },
 
-      { from: 'Date Created', to: 'airtable_created_at', kind: 'timestamptz' },
       { from: 'Last Modified Time', to: 'airtable_last_modified_at', kind: 'timestamptz' },
     ],
   },
