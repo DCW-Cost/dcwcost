@@ -25,24 +25,32 @@ const BATCH = 200;
 /**
  * Stop before Netlify's limit so the run can still be closed honestly.
  *
- * MEASURED, 5 October 2026, loading projects + deliverables for real:
- *
- *   the function is killed at 15 minutes. The run row's clock starts a few
- *   seconds earlier, when the trigger opens it, so a row showing ~15:15 is a
- *   function that got its full fifteen.
+ * WHAT IS ACTUALLY MEASURED, 5 October 2026, loading projects+deliverables:
  *
  *   write rate is about 20 rows/sec on narrow tables (contacts, 12 columns)
- *   and about 17 on deliverables (60 columns). 16,592 rows took ~15 minutes
- *   and did not finish. That is the number to size phase two's 14 tables
- *   against — not a guess, and not the dry-run rate, which only counts rows
- *   and is an order of magnitude faster.
+ *   and about 17 on deliverables (60 columns). That is from row counts
+ *   sampled during the run and is the number to size phase two's 14 tables
+ *   against — not the dry-run rate, which only counts rows and is an order
+ *   of magnitude faster.
  *
- * THE BUDGET ONLY WORKS IF IT IS CHECKED. On that run it never fired,
- * because it was checked between tables in LOAD_ORDER and nowhere else, and
- * the run died inside deliverables' join tables — 3,400 of 3,494 rows into
- * deliverable_project_managers, with the run row left saying `running`
- * because closeRun never got to run. It is now checked before each join
- * table as well, so the run ends by its own clock and closes itself.
+ * WHAT IS NOT KNOWN: why that run stopped. It wrote 16,592 rows, ran at
+ * least 28 minutes by the run row's clock, and did not finish. It was
+ * assumed at the time to have been killed at a 15-minute platform limit,
+ * and that assumption is NOT supported: rows were still being written 13
+ * minutes after the supposed cutoff. The run row cannot say, because the
+ * failure path never ran — the row was closed by hand afterwards. The
+ * Netlify function log for that invocation is the only remaining source
+ * and has not been read.
+ *
+ * So 13 minutes here is a conservative guess, not a measurement, and it
+ * should be set from the real limit once that is established.
+ *
+ * THE BUDGET ONLY WORKS IF IT IS CHECKED, and on that run it never was: it
+ * was checked between tables in LOAD_ORDER and nowhere else, so a run that
+ * spent its time inside deliverables' two join tables — 5,377 writes —
+ * never consulted it. That part is certain, and is what the change below
+ * fixes. It is also why the run could not close itself: it never reached
+ * the code that would have noticed.
  */
 export const RUN_BUDGET_MS = 13 * 60_000;
 
