@@ -119,8 +119,23 @@ export const POST: APIRoute = async ({ request, url }) => {
     });
   }
 
-  // Awaited. Netlify answers this POST with 202 as soon as it has accepted
-  // the invocation; the fifteen minutes happen after, on its own clock.
+  // DO NOT MAKE THIS FIRE-AND-FORGET. The argument for doing so is obvious,
+  // sounds right, and is wrong — it was made once already, in this file, and
+  // broke the first run through this route:
+  //
+  //   "the background function runs for fifteen minutes, so awaiting it here
+  //    will hit the SSR timeout"
+  //
+  // That conflates the POST THAT ENQUEUES the work with the work. Netlify
+  // answers this POST with 202 as soon as it has accepted the invocation —
+  // milliseconds — and runs the function afterwards on its own clock. The
+  // fifteen minutes are never on this request, so there is nothing to save.
+  //
+  // And the saving is not free: `void fetch(...)` in a serverless function is
+  // cancelled the moment the response is returned, because the instance is
+  // frozen. The request never leaves. What that bought the first time was a
+  // run row stuck in `running`, no tables, nothing written, and a caller told
+  // 202 — the exact silence this route exists to remove.
   const target = new URL('/.netlify/functions/airtable-sync-background', url.origin);
   try {
     const handoff = await fetch(target, {
