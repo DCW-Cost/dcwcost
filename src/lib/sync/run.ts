@@ -195,17 +195,29 @@ async function syncTable(
   // sentinel, which is itself worth seeing.
   if (opts.showRecords?.length) {
     const byId = new Map(records.filter((r) => r.id).map((r) => [r.id, r]));
+    // AN ID NAMED EXPLICITLY MUST NOT BE CROWDED OUT BY A TEXT MATCH. The
+    // first version took plans in Airtable order and stopped at the cap, so
+    // asking for one specific record and one loose phrase could return five
+    // of the phrase and not the record — the one thing that was asked for by
+    // name. Exact ids are rendered first, and they do not count against the
+    // cap, because naming five ids is asking for five rows.
+    const wanted = new Set(opts.showRecords);
+    const exact = plans.filter((p) => wanted.has(p.airtableRecordId));
+    const fuzzy = plans.filter((p) => !wanted.has(p.airtableRecordId));
     let shown = 0;
-    for (const plan of plans) {
-      if (shown >= (opts.showLimit ?? SHOW_LIMIT)) break;
+    for (const plan of [...exact, ...fuzzy]) {
+      const isExact = wanted.has(plan.airtableRecordId);
+      if (!isExact && shown >= (opts.showLimit ?? SHOW_LIMIT)) break;
       const record = byId.get(plan.airtableRecordId);
-      if (!record || !matchesAny(record, opts.showRecords)) continue;
-      shown++;
+      if (!record || !(isExact || matchesAny(record, opts.showRecords, t))) continue;
+      if (!isExact) shown++;
       const rendered = renderPlan(t, plan, record);
       samples.push(rendered);
       for (const line of rendered.split('\n')) log(line);
     }
-    if (shown) log(`${key}: rendered ${shown} sampled row${shown === 1 ? '' : 's'}`);
+    if (shown || exact.length) {
+      log(`${key}: rendered ${exact.length} by id and ${shown} by text match`);
+    }
   }
 
   if (opts.dryRun) {
@@ -563,16 +575,24 @@ function truncate(value: string): string {
 }
 
 /**
- * An id, or any text appearing anywhere in the record's fields.
+ * Any text appearing in the fields THIS TABLE ACTUALLY MAPS.
  *
- * Matching the whole record rather than a named field is deliberate: the
- * point is to find "that Oregon Zoo project" without first knowing which
- * field carries the name, and a task is found by its project just as often
- * as by its own title.
+ * Searching the whole raw record looked more helpful and was much worse.
+ * Airtable returns every field including lookups and rollups the map
+ * ignores, and a person's record carries the name of every project they
+ * have touched. Asking for "Oregon Zoo" that way returned two staff, three
+ * contacts at firms that had worked on it, and five Metro on-call tasks —
+ * not one of which has the phrase in a column the mirror stores.
+ *
+ * Restricting the haystack to mapped fields means a match is a match on
+ * something the mirror will hold, which is the only kind worth inspecting.
+ * An exact id bypasses this entirely and is handled by the caller.
  */
-function matchesAny(record: AirtableRecord, terms: readonly string[]): boolean {
-  if (terms.some((term) => term === record.id)) return true;
-  const haystack = JSON.stringify(record.fields ?? {}).toLowerCase();
+function matchesAny(record: AirtableRecord, terms: readonly string[], t: TableSpec): boolean {
+  const mapped: unknown[] = [];
+  for (const f of t.fields) if (record.fields?.[f.from] !== undefined) mapped.push(record.fields[f.from]);
+  for (const j of t.joins ?? []) if (record.fields?.[j.from] !== undefined) mapped.push(record.fields[j.from]);
+  const haystack = JSON.stringify(mapped).toLowerCase();
   return terms.some((term) => term.length > 0 && haystack.includes(term.toLowerCase()));
 }
 
