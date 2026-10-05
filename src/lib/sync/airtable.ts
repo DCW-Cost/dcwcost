@@ -76,6 +76,38 @@ export interface ReadOptions {
   maxRecords?: number;
   /** Called after each page, for progress that outlives a crash. */
   onPage?: (soFar: number) => void;
+  /** Called with each page's measurement when `measure` is set. */
+  onMeasure?: (m: PageMeasurement) => void;
+  /**
+   * Report the wire size of each page and the spread of record sizes.
+   *
+   * MEASURED THROUGH THIS CLIENT, WHICH IS THE POINT. A task record was
+   * observed at 21.8 MB through the Airtable MCP server, with one rollup
+   * field at 16 million characters — but the MCP expands linked records,
+   * and the real sync reads all 5,557 tasks in about thirty seconds, so
+   * the per-record size on THIS path was never established.
+   *
+   * It matters because a run was observed using 821 MB of a 1,024 MB
+   * limit, and whether Time Tracking's 29,119 records can be read at all
+   * rests on a number nobody has measured. Extrapolating from the MCP
+   * figure would be fitting a line through a unit from a different path.
+   *
+   * Off by default: it keeps the response body as a string alongside the
+   * parsed objects for the duration of a page, which is the one thing a
+   * memory investigation should not do unasked.
+   */
+  measure?: boolean;
+}
+
+/** What one page cost on the wire, and how unevenly it was distributed. */
+export interface PageMeasurement {
+  records: number;
+  bytes: number;
+  perRecordMin: number;
+  perRecordMedian: number;
+  perRecordMax: number;
+  /** The biggest record in the page. An average hides a 20x outlier; this does not. */
+  largestRecordId: string | null;
 }
 
 /**
@@ -115,6 +147,7 @@ export async function readTable(table: string, opts: ReadOptions): Promise<Airta
     if (offset) url.searchParams.set('offset', offset);
 
     const page = await request(url, opts);
+    if (page.measurement) opts.onMeasure?.(page.measurement);
     for (const r of page.records ?? []) out.push(r);
     offset = page.offset;
     opts.onPage?.(out.length);
@@ -128,6 +161,28 @@ export async function readTable(table: string, opts: ReadOptions): Promise<Airta
 interface Page {
   records?: AirtableRecord[];
   offset?: string;
+  measurement?: PageMeasurement;
+}
+
+function measurePage(records: AirtableRecord[], bytes: number): PageMeasurement {
+  const sizes = records.map((r) => JSON.stringify(r).length).sort((a, b) => a - b);
+  let largestRecordId: string | null = null;
+  let largest = -1;
+  for (const r of records) {
+    const n = JSON.stringify(r).length;
+    if (n > largest) {
+      largest = n;
+      largestRecordId = r.id ?? null;
+    }
+  }
+  return {
+    records: records.length,
+    bytes,
+    perRecordMin: sizes[0] ?? 0,
+    perRecordMedian: sizes[Math.floor(sizes.length / 2)] ?? 0,
+    perRecordMax: sizes[sizes.length - 1] ?? 0,
+    largestRecordId,
+  };
 }
 
 async function request(url: URL, opts: ReadOptions): Promise<Page> {
@@ -138,7 +193,16 @@ async function request(url: URL, opts: ReadOptions): Promise<Page> {
       fetch(url, { headers: { Authorization: `Bearer ${opts.apiKey}` } })
     );
 
-    if (res.ok) return (await res.json()) as Page;
+    if (res.ok) {
+      if (!opts.measure) return (await res.json()) as Page;
+      // Only when asked: holding the body as text as well as parsed is
+      // exactly the extra allocation a memory investigation must not add
+      // to every run.
+      const body = await res.text();
+      const page = JSON.parse(body) as Page;
+      page.measurement = measurePage(page.records ?? [], body.length);
+      return page;
+    }
 
     // Airtable's own backpressure. Honour the header it sends rather than
     // guessing, and never retry blindly — a tight retry loop against a 429 is

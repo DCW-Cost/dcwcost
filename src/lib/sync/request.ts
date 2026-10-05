@@ -37,6 +37,8 @@ export interface ParsedRequest {
   runId?: string;
   /** Write only the join tables, leaving their parents untouched. */
   joinsOnly?: boolean;
+  /** Log per-page wire size and record-size spread. */
+  measure?: boolean;
 }
 
 /** Non-empty strings only, or undefined. Shared by showRecords and tables. */
@@ -76,5 +78,6 @@ export function parseSyncRequest(body: unknown): ParsedRequest {
     // Strictly true, like dryRun. The costly direction of a mistake here is
     // a run that silently writes no parents when a full load was wanted.
     joinsOnly: b.joinsOnly === true,
+    measure: b.measure === true,
   };
 }

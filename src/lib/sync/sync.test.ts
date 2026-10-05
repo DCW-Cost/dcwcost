@@ -921,3 +921,21 @@ test('the time budget is checked before each join table, not only between tables
   assert.match(joinLoop.slice(0, 700), /RUN_BUDGET_MS/, 'the join loop must check the budget');
   assert.match(joinLoop.slice(0, 900), /joinsOnly/, 'and say how to finish the run');
 });
+
+test('measure is parsed and reaches the runner', async () => {
+  assert.equal(parseSyncRequest({ measure: true }).measure, true);
+  assert.equal(parseSyncRequest({ measure: 'yes' }).measure, false);
+  const s = spy();
+  await handleSync(post({ dryRun: true, tables: ['deliverables'], sampleSize: 100, measure: true }), ENV, s.run);
+  assert.equal(s.seen[0].opts.measure, true);
+  assert.equal(s.seen[0].opts.sampleSize, 100);
+});
+
+test('measuring is off unless asked, because it costs memory to do', () => {
+  // It keeps the response body as a string alongside the parsed objects.
+  // Adding that to every run is the one thing a memory investigation must
+  // not do, so the default path must still go straight to res.json().
+  const src = readFileSync(new URL('./airtable.ts', import.meta.url), 'utf8');
+  assert.match(src, /if \(!opts\.measure\) return \(await res\.json\(\)\) as Page;/);
+  assert.equal(parseSyncRequest({}).measure, false);
+});
