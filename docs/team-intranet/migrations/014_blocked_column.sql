@@ -1,0 +1,89 @@
+-- ============================================================================
+-- 014 — record `blocked`, the number that matters most on a real run
+--
+-- sync_run_tables exists to record what a run did, per table. It has columns
+-- for read, inserted, updated, unchanged, would_insert_existing, unresolved
+-- and anomalies. It has none for `blocked`, which the sync has counted all
+-- along and could only report in the free-text summary on sync_runs.notes.
+--
+-- WHAT BLOCKED MEANS, AND WHY IT IS THE IMPORTANT ONE
+--
+-- A blocked row is an upsert that ran, returned no error, and wrote nothing:
+-- the DO UPDATE's WHERE excluded it, or an RLS policy did. Nothing throws.
+-- Nothing retries. The count is the only evidence it happened.
+--
+-- Every other column on this table records something that went right. This
+-- one records a silent failure, which is precisely what a bookkeeping table
+-- is for, and it is the one that was missing.
+--
+-- It read 0 on every dry run to date, and that proves nothing: a dry run
+-- writes nothing, so nothing can be blocked. The first run where this can be
+-- non-zero is the first real one, which is the reason to add the column now
+-- rather than after.
+--
+-- No GRANT is needed and that is checked rather than assumed: airtable_sync
+-- holds INSERT, SELECT and UPDATE at TABLE level on sync_run_tables, not
+-- column level, so a new column is covered by the existing grant. Had those
+-- been column-level — as they are on the join tables and on people — this
+-- migration would have needed a grant and the sync would have started
+-- failing on a column it could not write. Verified below either way.
+--
+-- Idempotent: add-if-not-exists, with a default so existing rows are 0
+-- rather than null. Older runs genuinely had no measurement, but every one
+-- of them was a dry run, where the true value is 0.
+-- ============================================================================
+
+alter table sync_run_tables
+  add column if not exists blocked integer not null default 0;
+
+comment on column sync_run_tables.blocked is
+  'Upserts that ran, errored nothing, and wrote no row - excluded by the DO '
+  'UPDATE''s WHERE or by a policy. Always 0 on a dry run, which writes nothing.';
+
+-- ============================================================================
+-- VERIFICATION
+--
+-- Uncomment and run as a second query. Every row should read exactly this:
+--
+--   blocked exists            integer
+--   blocked not null          true
+--   blocked default           0
+--   existing rows backfilled  0 rows with a null
+--   sync can write it         true
+--   grant is table-level      true
+--
+-- "grant is table-level" is the one that is easy to skip and is the reason
+-- this migration needed no GRANT. If it ever reads false, a column added to
+-- this table in future DOES need one, and the sync will fail on it.
+--
+-- Run against production before committing, per the standing practice. Ten
+-- of the eleven statements were run there as written. The exception is
+-- has_column_privilege on `blocked`, which RAISES on a column that does not
+-- exist yet — the same thing that broke 008's verification — so it cannot be
+-- rehearsed before the ALTER. Its form was run against `anomalies` on the
+-- same table and returned true, which is as close as this one can get.
+-- ============================================================================
+--
+-- select 'blocked exists' as item,
+--        coalesce((select data_type from information_schema.columns
+--                   where table_schema='public' and table_name='sync_run_tables'
+--                     and column_name='blocked'), 'MISSING') as value
+-- union all select 'blocked not null',
+--        (select (is_nullable='NO')::text from information_schema.columns
+--          where table_schema='public' and table_name='sync_run_tables'
+--            and column_name='blocked')
+-- union all select 'blocked default',
+--        (select coalesce(column_default,'(none)') from information_schema.columns
+--          where table_schema='public' and table_name='sync_run_tables'
+--            and column_name='blocked')
+-- union all select 'existing rows backfilled',
+--        (select count(*)::text || ' rows with a null' from sync_run_tables
+--          where blocked is null)
+-- union all select 'sync can write it',
+--        has_column_privilege('airtable_sync','sync_run_tables','blocked','INSERT')::text
+-- union all select 'grant is table-level',
+--        exists (select 1 from information_schema.role_table_grants
+--                 where table_schema='public' and table_name='sync_run_tables'
+--                   and grantee='airtable_sync' and privilege_type='INSERT')::text;
+--
+-- ============================================================================
