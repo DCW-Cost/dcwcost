@@ -884,3 +884,40 @@ test('a required column nothing maps fails the run before the first batch', () =
   assert.match(src, /the field map never writes/);
   assert.match(src, /throw new Error\(/);
 });
+
+// --------------------------------------------- finishing a killed run
+
+test('joinsOnly is parsed, and strictly true', () => {
+  assert.equal(parseSyncRequest({ joinsOnly: true }).joinsOnly, true);
+  assert.equal(parseSyncRequest({ joinsOnly: 'true' }).joinsOnly, false);
+  assert.equal(parseSyncRequest({}).joinsOnly, false);
+});
+
+test('the handler passes joinsOnly through to the runner', async () => {
+  const s = spy();
+  await handleSync(post({ tables: ['deliverables'], joinsOnly: true }), ENV, s.run);
+  assert.equal(s.seen[0].opts.joinsOnly, true);
+});
+
+test('joinsOnly loads parent keys instead of writing parents', () => {
+  // A join row needs its parent's uuid. On a normal run the parent upsert
+  // supplies it; with the parent skipped it has to come from the mirror, or
+  // every join row would be unresolved.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const branch = src.slice(src.indexOf('if (opts.joinsOnly) {'));
+  assert.match(branch.slice(0, 400), /loadKeyMap\(db, key\)/);
+  // And it must not report a parent result, or the run reads as though the
+  // parent was attempted and wrote nothing.
+  assert.match(src, /opts\.joinsOnly \? \[\] : \[result\]/);
+});
+
+test('the time budget is checked before each join table, not only between tables', () => {
+  // The 5 October run died inside deliverables' join tables with the budget
+  // never consulted: it was checked in the LOAD_ORDER loop and nowhere else,
+  // so a table whose joins are 5,377 writes could overrun without ever
+  // asking. The run row was left saying `running` because closeRun never ran.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const joinLoop = src.slice(src.indexOf('for (const join of t.joins'));
+  assert.match(joinLoop.slice(0, 700), /RUN_BUDGET_MS/, 'the join loop must check the budget');
+  assert.match(joinLoop.slice(0, 900), /joinsOnly/, 'and say how to finish the run');
+});

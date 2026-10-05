@@ -29,6 +29,11 @@
  *                               still written before children. A table left
  *                               out still has its keys loaded, so links into
  *                               it resolve against what is already mirrored.
+ *   { "tables": ["deliverables"], "joinsOnly": true }
+ *                               write only that table's JOIN tables, leaving
+ *                               the parent rows untouched. For finishing a
+ *                               run killed inside a join table, without
+ *                               re-upserting thousands of parent rows first.
  */
 import type { Context } from '@netlify/functions';
 import { withDb } from '../../src/lib/sync/db.ts';

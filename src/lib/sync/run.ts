@@ -22,7 +22,28 @@ import { buildJoinUpsert, buildUpsert, columnsFor, planJoins, planRow, type Issu
 /** Upserts per transaction. Small enough to stay well inside the 60 s idle limit. */
 const BATCH = 200;
 
-/** Stop before Netlify's 15 minutes so the run can still be closed honestly. */
+/**
+ * Stop before Netlify's limit so the run can still be closed honestly.
+ *
+ * MEASURED, 5 October 2026, loading projects + deliverables for real:
+ *
+ *   the function is killed at 15 minutes. The run row's clock starts a few
+ *   seconds earlier, when the trigger opens it, so a row showing ~15:15 is a
+ *   function that got its full fifteen.
+ *
+ *   write rate is about 20 rows/sec on narrow tables (contacts, 12 columns)
+ *   and about 17 on deliverables (60 columns). 16,592 rows took ~15 minutes
+ *   and did not finish. That is the number to size phase two's 14 tables
+ *   against — not a guess, and not the dry-run rate, which only counts rows
+ *   and is an order of magnitude faster.
+ *
+ * THE BUDGET ONLY WORKS IF IT IS CHECKED. On that run it never fired,
+ * because it was checked between tables in LOAD_ORDER and nowhere else, and
+ * the run died inside deliverables' join tables — 3,400 of 3,494 rows into
+ * deliverable_project_managers, with the run row left saying `running`
+ * because closeRun never got to run. It is now checked before each join
+ * table as well, so the run ends by its own clock and closes itself.
+ */
 export const RUN_BUDGET_MS = 13 * 60_000;
 
 export interface SyncOptions {
@@ -137,7 +158,7 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
       if (Date.now() - started > RUN_BUDGET_MS) {
         throw new Error(`out of time before ${key}; ${Math.round((Date.now() - started) / 1000)}s elapsed`);
       }
-      const produced = await syncTable(db, runId, key, keys, limiter, opts, log, samples);
+      const produced = await syncTable(db, runId, key, keys, limiter, opts, log, samples, started);
       for (const result of produced) {
         results.push(result);
         await recordTable(db, runId, result);
@@ -175,7 +196,8 @@ async function syncTable(
   limiter: RateLimiter,
   opts: SyncOptions,
   log: (s: string) => void,
-  samples: string[] = []
+  samples: string[] = [],
+  startedAt: number = Date.now()
 ): Promise<TableResult[]> {
   const t = spec(key);
   const records = await readTable(t.airtable, {
@@ -329,7 +351,13 @@ async function syncTable(
     }
   }
 
-  if (opts.dryRun) {
+  if (opts.joinsOnly) {
+    // The parent is left exactly as it is. Its keys come from the mirror,
+    // which is what the upsert below would otherwise have supplied, so the
+    // join tables resolve against rows an earlier run already wrote.
+    keys.set(key, await loadKeyMap(db, key));
+    log(`${key}: joinsOnly — parent not written, ${keys.get(key)?.size ?? 0} existing keys loaded`);
+  } else if (opts.dryRun) {
     const existing = await existingKeys(db, key, plans.map((p) => p.airtableRecordId));
     for (const p of plans) {
       if (existing.has(p.airtableRecordId)) result.updated++;
@@ -382,8 +410,20 @@ async function syncTable(
   // Join tables come after the parent, because a join row needs the parent's
   // uuid and that only exists once the parent has been written (or, in a dry
   // run, once the sentinel map is in place).
-  const produced: TableResult[] = [result];
+  // On a joinsOnly run the parent was not written, so reporting a row of
+  // zeros for it would read as "0 inserted" rather than "not attempted".
+  const produced: TableResult[] = opts.joinsOnly ? [] : [result];
   for (const join of t.joins ?? []) {
+    // Checked here too, not only between tables in LOAD_ORDER. A join table
+    // is thousands of writes and deliverables' two are 5,377 of them, which
+    // is where the 5 October run was killed with the budget never consulted.
+    if (Date.now() - startedAt > RUN_BUDGET_MS) {
+      throw new Error(
+        `out of time before ${join.table}; ${Math.round((Date.now() - startedAt) / 1000)}s elapsed. ` +
+          `Re-run with {"tables":["${key}"],"joinsOnly":true} to finish the join tables without ` +
+          'rewriting the parent.'
+      );
+    }
     produced.push(await syncJoin(db, runId, t, join, records, keys, opts, log));
   }
   return produced;
