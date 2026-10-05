@@ -117,20 +117,33 @@ export interface PageMeasurement {
  * makes a URL long enough to be rejected, and the map in tables.ts decides
  * what is kept anyway. The cost is bandwidth on lookup fields we discard.
  *
- * IF A RUN EVER DIES ON MEMORY, LOOK HERE FIRST. That cost is not uniform.
- * DCW Project Tasks carries rollups that fan out across linked records, and
- * one task — recXCLgbkVXQtgUlk, the non-billable bucket with 19,566 hours on
- * it — came back as 21.8 MB of JSON for a SINGLE record, one of its rollup
- * fields alone being 16 million characters. That was observed through the
- * Airtable MCP server rather than this client, and the real sync reads all
- * 5,557 tasks in about thirty seconds, so the REST API with cellFormat=json
- * evidently returns something far smaller. But the fan-out is a property of
- * the base, not of the client, so the ceiling is not known — and a page of
- * 100 records is held in memory at once.
+ * IF A RUN EVER DIES ON MEMORY, LOOK HERE FIRST, and the numbers are now
+ * measured through this client rather than guessed. One page of DCW Project
+ * Tasks, 5 October 2026:
  *
- * The fix, if it is ever needed, is `returnFieldsByFieldId` plus a chunked
- * `fields[]` list over several requests, not a smaller pageSize: the volume
- * is per record, not per page.
+ *   100 records, 6,004,287 bytes on the wire — 60,043 average per record
+ *   min 5,095 · median 29,705 · max 288,462
+ *
+ * An earlier note here said a single task was 21.8 MB with a 16-million-
+ * character rollup. THAT WAS AN ARTEFACT of the Airtable MCP server, which
+ * expands linked records; on this client the largest record in the page is
+ * 288 KB, seventy-five times smaller. The note is kept rather than deleted
+ * because the figure circulated for a while and someone may remember it.
+ *
+ * The distribution is right-skewed — the mean is twice the median — but no
+ * single record dominates: the largest is 4.8% of its page. Extrapolating
+ * from an average is therefore sound here, which is not something to assume
+ * of another table without measuring it the same way.
+ *
+ * EVERY RECORD IS HELD AT ONCE, which is the actual problem. 5,557 tasks is
+ * about 334 MB of raw JSON before parsing, and a run was observed at 821 MB
+ * of a 1,024 MB limit. Measured against a 100-record run at 174 MB, memory
+ * runs at roughly 162 MB of baseline plus 118 KB per record — about twice
+ * the wire size, which is what parsed objects plus a retained RowPlan cost.
+ *
+ * The fix is to stream: read a page, plan it, write it, discard it, keeping
+ * only the key map and the join pairs, which are strings and stay under a
+ * megabyte. Not a smaller pageSize — the volume is per record, not per page.
  */
 export async function readTable(table: string, opts: ReadOptions): Promise<AirtableRecord[]> {
   const out: AirtableRecord[] = [];
