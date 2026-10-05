@@ -1,0 +1,68 @@
+/**
+ * Turning an HTTP body into sync options.
+ *
+ * WHY THIS IS NOT IN THE NETLIFY FUNCTION, WHERE IT OBVIOUSLY BELONGS.
+ *
+ * It was. Parsing four fields inline looked too small to extract, and the
+ * result was an outage that no test could have caught:
+ *
+ *   const tables = Array.isArray(body.tables) ? … : undefined;   // outer
+ *   try {
+ *     const { runId, tables } = await withDb(url, (db) =>        // shadows it
+ *       runSync(db, { …, tables, … }));                          // binds to the shadow
+ *
+ * runSync returns `{ runId, tables }`, so the destructuring declares a second
+ * `tables` in the try block. The arrow function is inside that block, so its
+ * `tables` resolved to the binding being initialised by the await it was part
+ * of — a temporal dead zone. Every request died with "Cannot access 'tables2'
+ * before initialization" before the run row was opened, and because a
+ * background function answers 202 before any of this executes, the caller saw
+ * success. The only visible symptom was a run that never appeared.
+ *
+ * The handler body cannot be tested: it reads `Netlify.env`, which does not
+ * exist in the test runner. So anything that lives there is unverified by
+ * construction, and the import smoke test only proves the module loads. The
+ * fix is to leave almost nothing there. This function is pure, exported, and
+ * tested; the handler reads env, checks the secret, and calls it.
+ */
+import type { TableKey } from './tables.ts';
+
+export interface ParsedRequest {
+  dryRun: boolean;
+  sampleSize?: number;
+  showRecords?: string[];
+  showLimit?: number;
+  tables?: TableKey[];
+}
+
+/** Non-empty strings only, or undefined. Shared by showRecords and tables. */
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value.filter((v): v is string => typeof v === 'string' && v.trim() !== '');
+  return out.length ? out : undefined;
+}
+
+/** A positive whole number, or undefined. */
+function positiveInt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+export function parseSyncRequest(body: unknown): ParsedRequest {
+  const b = (body ?? {}) as Record<string, unknown>;
+  return {
+    // Strictly `true`. A body of {"dryRun":"false"} must not be truthy, and
+    // the direction of that mistake is a real write someone expected to be
+    // a rehearsal.
+    dryRun: b.dryRun === true,
+    sampleSize: positiveInt(b.sampleSize),
+    // An empty string would match every record and turn a sample into a dump
+    // of the whole base, so empties are dropped here rather than downstream.
+    showRecords: stringList(b.showRecords),
+    showLimit: positiveInt(b.showLimit),
+    // NOT validated against LOAD_ORDER here. runSync throws on an unknown
+    // name, which closes the run as failed with the reason in it. Filtering
+    // a misspelling out instead would sync fewer tables than were asked for
+    // and report success.
+    tables: stringList(b.tables) as TableKey[] | undefined,
+  };
+}

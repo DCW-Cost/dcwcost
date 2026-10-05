@@ -33,6 +33,7 @@
 import type { Context } from '@netlify/functions';
 import { withDb } from '../../src/lib/sync/db.ts';
 import { runSync } from '../../src/lib/sync/run.ts';
+import { parseSyncRequest } from '../../src/lib/sync/request.ts';
 
 export default async (req: Request, _context: Context) => {
   const dbUrl = Netlify.env.get('AIRTABLE_SYNC_DATABASE_URL');
@@ -65,46 +66,24 @@ export default async (req: Request, _context: Context) => {
     return;
   }
 
-  const body = (await req.json().catch(() => ({}))) as {
-    dryRun?: unknown;
-    sampleSize?: unknown;
-    showRecords?: unknown;
-    showLimit?: unknown;
-    tables?: unknown;
-  };
-  const dryRun = body.dryRun === true;
-  const sampleSize =
-    typeof body.sampleSize === 'number' && body.sampleSize > 0 ? Math.floor(body.sampleSize) : undefined;
-  // Strings only, and non-empty: an empty term matches every record, which
-  // would turn a sample into a dump of the whole base.
-  const showRecords = Array.isArray(body.showRecords)
-    ? body.showRecords.filter((v): v is string => typeof v === 'string' && v.trim() !== '')
-    : undefined;
-  const showLimit =
-    typeof body.showLimit === 'number' && body.showLimit > 0 ? Math.floor(body.showLimit) : undefined;
-  // Not validated here: runSync rejects an unknown name by throwing, which
-  // closes the run as failed with the reason. Silently dropping a misspelled
-  // table would sync less than was asked for and report success.
-  const tables = Array.isArray(body.tables)
-    ? (body.tables.filter((v): v is string => typeof v === 'string' && v.trim() !== '') as never)
-    : undefined;
+  const body = await req.json().catch(() => ({}));
+  const opts = parseSyncRequest(body);
 
   const started = Date.now();
   try {
-    const { runId, tables } = await withDb(dbUrl!, (db) =>
+    // `results` rather than `tables`: runSync returns { runId, tables }, and
+    // naming it `tables` here is what shadowed the parsed option and took the
+    // function down. See src/lib/sync/request.ts.
+    const { runId, tables: results } = await withDb(dbUrl!, (db) =>
       runSync(db, {
         apiKey: apiKey!,
         baseId: baseId!,
-        dryRun,
-        sampleSize,
-        showRecords,
-        showLimit,
-        tables,
+        ...opts,
         log: (line) => console.log(`[sync] ${line}`),
       })
     );
 
-    for (const t of tables) {
+    for (const t of results) {
       console.log(
         `[sync] ${t.table}: read ${t.readFromAirtable}, insert ${t.inserted}, update ${t.updated}, ` +
           `blocked ${t.blocked}, unresolved ${t.unresolvedParents}, anomalies ${t.anomalies}` +
@@ -113,7 +92,7 @@ export default async (req: Request, _context: Context) => {
     }
     console.log(
       `[sync] run ${runId} finished in ${Math.round((Date.now() - started) / 1000)}s` +
-        `${dryRun ? ' (dry run — nothing was written to the mirror)' : ''}`
+        `${opts.dryRun ? ' (dry run — nothing was written to the mirror)' : ''}`
     );
   } catch (err) {
     // The run row is already closed as 'failed' with the reason by runSync;

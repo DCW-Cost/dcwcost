@@ -17,6 +17,7 @@ import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
 import { renderPlan, selectedTables } from './run.ts';
+import { parseSyncRequest } from './request.ts';
 import { readFileSync } from 'node:fs';
 
 // ---------------------------------------------------------------- coercion
@@ -649,4 +650,68 @@ test('the text match only sees fields the table maps', () => {
   // the same reason it must not drive a match.
   assert.ok(!out.includes('Oregon Zoo'), 'an unmapped lookup is not written');
   assert.match(out, /task_name = "Site Visit"/);
+});
+
+// --------------------------------------------- parsing the request body
+
+test('the request body becomes options, with empties dropped', () => {
+  const p = parseSyncRequest({
+    dryRun: true,
+    sampleSize: 50.9,
+    showRecords: ['Oregon Zoo', '', '   ', 'recKtnJugR0TUc2D6'],
+    showLimit: 3,
+    tables: ['people', 'subconsultants'],
+  });
+  assert.equal(p.dryRun, true);
+  assert.equal(p.sampleSize, 50, 'floored');
+  assert.deepEqual(p.showRecords, ['Oregon Zoo', 'recKtnJugR0TUc2D6'], 'blanks dropped');
+  assert.equal(p.showLimit, 3);
+  assert.deepEqual(p.tables, ['people', 'subconsultants']);
+});
+
+test('dryRun is strictly true, never truthy', () => {
+  // The direction of this mistake is a real write someone believed was a
+  // rehearsal, so "false", 1 and "yes" must all mean a real run was asked
+  // for explicitly — not accidentally turned into one.
+  assert.equal(parseSyncRequest({ dryRun: 'false' }).dryRun, false);
+  assert.equal(parseSyncRequest({ dryRun: 'true' }).dryRun, false);
+  assert.equal(parseSyncRequest({ dryRun: 1 }).dryRun, false);
+  assert.equal(parseSyncRequest({}).dryRun, false);
+  assert.equal(parseSyncRequest({ dryRun: true }).dryRun, true);
+});
+
+test('an empty or junk body gives an all-tables real run, not a crash', () => {
+  for (const body of [undefined, null, {}, [], 'nonsense', 42]) {
+    const p = parseSyncRequest(body);
+    assert.equal(p.dryRun, false);
+    assert.equal(p.tables, undefined, 'undefined means every table');
+    assert.equal(p.showRecords, undefined);
+  }
+});
+
+test('an unknown table name survives parsing so the run can reject it', () => {
+  // Parsing must NOT filter it: runSync throws on an unknown name and closes
+  // the run as failed with the reason. Dropping it here would sync fewer
+  // tables than were asked for and report success.
+  assert.deepEqual(parseSyncRequest({ tables: ['peoples'] }).tables, ['peoples']);
+  assert.throws(() => selectedTables(parseSyncRequest({ tables: ['peoples'] }).tables), /unknown table/);
+});
+
+test('nothing the handler passes to runSync is named `tables`', () => {
+  // The outage: the handler had `const tables = …`, then
+  // `const { runId, tables } = await withDb(…)` inside the try block, and the
+  // arrow passed to withDb bound to the shadow mid-initialisation. Every
+  // request died in the temporal dead zone before opening a run, while the
+  // background function answered 202. Nothing could catch it, because the
+  // handler reads Netlify.env and no test can invoke it.
+  const src = readFileSync(
+    new URL('../../../netlify/functions/airtable-sync-background.mts', import.meta.url),
+    'utf8'
+  );
+  assert.ok(!/const\s+tables\s*=/.test(src), 'no local named `tables` in the handler');
+  assert.ok(
+    /const\s*\{\s*runId,\s*tables:\s*\w+\s*\}/.test(src),
+    "runSync's returned `tables` must be renamed on destructuring"
+  );
+  assert.ok(src.includes('parseSyncRequest'), 'body parsing stays in the tested module');
 });
