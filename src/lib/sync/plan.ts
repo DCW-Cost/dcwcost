@@ -65,6 +65,7 @@ export function columnsFor(spec: TableSpec): string[] {
   const cols = ['airtable_record_id'];
   for (const f of spec.fields) if (!cols.includes(f.to)) cols.push(f.to);
   for (const c of Object.keys(spec.insertConstants ?? {})) if (!cols.includes(c)) cols.push(c);
+  if (spec.createdAtColumn && !cols.includes(spec.createdAtColumn)) cols.push(spec.createdAtColumn);
   if (spec.key === 'deliverables') cols.push('completed_at');
   return cols;
 }
@@ -234,6 +235,23 @@ export function planRow(spec: TableSpec, record: AirtableRecord): RowPlan {
   }
 
   for (const [col, val] of Object.entries(spec.insertConstants ?? {})) byColumn.set(col, val);
+
+  // createdTime is metadata, not a field — see TableSpec.createdAtColumn.
+  // Coerced through the same path as everything else rather than trusted:
+  // it is a string from an API, and a missing or malformed one should land
+  // as null with an anomaly, not as "Invalid Date".
+  if (spec.createdAtColumn) {
+    const created = coerce('timestamptz', record.createdTime);
+    if (created.problem) {
+      issues.push({
+        kind: 'coercion_failed',
+        field: 'createdTime (record metadata)',
+        airtableValue: record.createdTime ?? null,
+        detail: `createdTime → ${spec.createdAtColumn}: ${created.problem}. Column left null; the record still loaded.`,
+      });
+    }
+    byColumn.set(spec.createdAtColumn, created.value);
+  }
   if (spec.key === 'deliverables') byColumn.set('completed_at', completedAtOnInsert(record.fields));
 
   const columns = columnsFor(spec);
