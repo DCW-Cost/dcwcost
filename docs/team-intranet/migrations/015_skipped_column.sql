@@ -1,0 +1,104 @@
+-- ============================================================================
+-- 015 — record `skipped`, for records the database would have refused
+--
+-- WHY THIS IS NOT THE SAME AS `blocked`
+--
+-- 014 added `blocked`: an upsert that ran, errored nothing, and wrote no row
+-- because the DO UPDATE's WHERE excluded it or a policy did.
+--
+-- `skipped` is the opposite shape. These records never reach an upsert at
+-- all, because the sync can see in advance that the database would refuse
+-- them: a column that is NOT NULL with no default would be null. They are
+-- left out deliberately and counted here.
+--
+-- The distinction matters because the failure it prevents is violent. A NOT
+-- NULL violation RAISES. It rolls back the entire 200-row transaction and
+-- fails the run — it is not a row quietly not written. On 5 October the
+-- client_companies load died exactly this way: one abandoned Airtable
+-- record with no company name, 200 rows already committed, 283 never
+-- attempted, and contacts never started.
+--
+-- Seven records across three tables would have done this during the full
+-- load, each one killing a run partway through:
+--
+--   client_companies  1  a shell whose every field is a formula or a zero
+--   projects          5  likewise, created 2023, zero tasks and zero billed
+--   deliverables      1  recXCLgbkVXQtgUlk, which is NOT a shell — see below
+--
+-- THE SEVENTH IS DELIBERATE DATA AND SKIPPING IT DEFERS A PROBLEM.
+-- recXCLgbkVXQtgUlk is the non-billable bucket: "Non-billable" /
+-- "Non-project Work", created March 2021, 19,566 logged hours. It has no
+-- project link by design, and deliverables.project_id is NOT NULL, so the
+-- mirror cannot hold it. Phase one does not sync time_entries, so nothing is
+-- lost today — but when time tracking is synced, every entry pointing at it
+-- will fail to resolve. The fix then is to make deliverables.project_id
+-- NULLABLE, not to invent a "Non-project Work" project: a deliverable
+-- genuinely can exist without a project, and creating a row that does not
+-- exist to satisfy a constraint would make the data lie about itself.
+--
+-- That reasoning is also in KNOWN_SKIPS in src/lib/sync/tables.ts, which
+-- appends it to the anomaly, so it is recorded where it will be read.
+--
+-- No GRANT is needed, and it is checked rather than assumed: airtable_sync
+-- holds INSERT, SELECT and UPDATE at TABLE level on sync_run_tables, so a
+-- new column is covered. Same check as 014, for the same reason.
+-- ============================================================================
+
+alter table sync_run_tables
+  add column if not exists skipped integer not null default 0;
+
+comment on column sync_run_tables.skipped is
+  'Records left out because a NOT NULL column would have been null. Distinct '
+  'from `blocked`: these never reach an upsert, because a NOT NULL violation '
+  'raises and would abort the whole batch rather than failing one row.';
+
+-- ============================================================================
+-- VERIFICATION
+--
+-- Uncomment and run as a second query. Every row should read exactly this:
+--
+--   skipped exists             integer
+--   skipped not null           true
+--   skipped default            0
+--   existing rows backfilled   0 rows with a null
+--   sync can write it          true
+--   grant is table-level       true
+--   blocked still there        integer
+--
+-- "blocked still there" is not padding. 014 and 015 add adjacent columns to
+-- the same table a few hours apart, and an ALTER that dropped and recreated
+-- would be a silent loss of the other. It costs one line to prove it did not.
+--
+-- Every statement below was run against production before this file was
+-- committed, except has_column_privilege on `skipped`, which RAISES on a
+-- column that does not exist yet — the same thing that broke 008. Its form
+-- was proven against `blocked` on the same table.
+-- ============================================================================
+--
+-- select 'skipped exists' as item,
+--        coalesce((select data_type from information_schema.columns
+--                   where table_schema='public' and table_name='sync_run_tables'
+--                     and column_name='skipped'), 'MISSING') as value
+-- union all select 'skipped not null',
+--        (select (is_nullable='NO')::text from information_schema.columns
+--          where table_schema='public' and table_name='sync_run_tables'
+--            and column_name='skipped')
+-- union all select 'skipped default',
+--        (select coalesce(column_default,'(none)') from information_schema.columns
+--          where table_schema='public' and table_name='sync_run_tables'
+--            and column_name='skipped')
+-- union all select 'existing rows backfilled',
+--        (select count(*)::text || ' rows with a null' from sync_run_tables
+--          where skipped is null)
+-- union all select 'sync can write it',
+--        has_column_privilege('airtable_sync','sync_run_tables','skipped','INSERT')::text
+-- union all select 'grant is table-level',
+--        exists (select 1 from information_schema.role_table_grants
+--                 where table_schema='public' and table_name='sync_run_tables'
+--                   and grantee='airtable_sync' and privilege_type='INSERT')::text
+-- union all select 'blocked still there',
+--        coalesce((select data_type from information_schema.columns
+--                   where table_schema='public' and table_name='sync_run_tables'
+--                     and column_name='blocked'), 'GONE');
+--
+-- ============================================================================

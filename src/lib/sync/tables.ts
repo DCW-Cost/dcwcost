@@ -435,3 +435,34 @@ export function spec(key: TableKey): TableSpec {
   if (!found) throw new Error(`no table spec for ${key}`);
   return found;
 }
+
+/**
+ * Records the sync cannot write, and what skipping each one costs.
+ *
+ * A record is skipped when a column the database requires would be null —
+ * see requiredColumns() in run.ts. Most skips need no explanation: a blank
+ * row in Airtable whose every field is a formula or a zero rollup is a shell
+ * somebody created and abandoned, and the anomaly saying "company_name would
+ * be null" is the whole story.
+ *
+ * This map is for the ones where it is NOT the whole story, because the
+ * record is deliberate and skipping it DEFERS a problem rather than avoiding
+ * one. The note is appended to the anomaly so the consequence is recorded
+ * where it will be read, at the moment it is caused, rather than rediscovered
+ * later as a symptom.
+ */
+export const KNOWN_SKIPS: Readonly<Record<string, string>> = {
+  recXCLgbkVXQtgUlk:
+    'This is the NON-BILLABLE BUCKET, not an abandoned row. Task Name "Non-billable", ' +
+    'Project Task Title "Non-project Work", created March 2021, carrying 19,566 logged ' +
+    'hours. It has no project link BY DESIGN, because it is not project work — and ' +
+    'deliverables.project_id is NOT NULL, so the mirror cannot hold it. ' +
+    'THE CONSEQUENCE IS DEFERRED, NOT AVOIDED: phase one does not sync time_entries, so ' +
+    'nothing is lost today. When time tracking is synced, every entry pointing at this ' +
+    'record will fail to resolve — 19,566 hours of them — and the decision made here is ' +
+    'what they will be symptoms of. ' +
+    'THE FIX AT THAT POINT IS TO MAKE deliverables.project_id NULLABLE, not to invent a ' +
+    '"Non-project Work" project to hang it from. A deliverable genuinely can exist ' +
+    'without a project; that is the true shape. Creating a row that does not exist to ' +
+    'satisfy a constraint would make the data lie about itself.',
+};

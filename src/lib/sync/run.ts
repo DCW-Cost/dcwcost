@@ -16,8 +16,8 @@
 import type { Db } from './db.ts';
 import { inTransaction } from './db.ts';
 import { RateLimiter, readTable, type AirtableRecord } from './airtable.ts';
-import { LOAD_ORDER, spec, TABLES, type JoinSpec, type TableKey, type TableSpec } from './tables.ts';
-import { buildJoinUpsert, buildUpsert, planJoins, planRow, type Issue, type RowPlan } from './plan.ts';
+import { KNOWN_SKIPS, LOAD_ORDER, spec, TABLES, type JoinSpec, type TableKey, type TableSpec } from './tables.ts';
+import { buildJoinUpsert, buildUpsert, columnsFor, planJoins, planRow, type Issue, type RowPlan } from './plan.ts';
 
 /** Upserts per transaction. Small enough to stay well inside the 60 s idle limit. */
 const BATCH = 200;
@@ -90,6 +90,14 @@ export interface TableResult {
   unresolvedParents: number;
   anomalies: number;
   blocked: number;
+  /**
+   * Records the database could not have accepted, left out on purpose.
+   *
+   * A NOT NULL violation RAISES rather than writing nothing, so it aborts
+   * the whole 200-row batch and fails the run — it is not a `blocked` row.
+   * One abandoned record in Airtable would otherwise stop a load of 18,803.
+   */
+  skipped: number;
 }
 
 const DRY = '(dry-run)';
@@ -188,6 +196,7 @@ async function syncTable(
     unresolvedParents: 0,
     anomalies: 0,
     blocked: 0,
+    skipped: 0,
   };
 
   const issues: { recordId: string; issue: Issue }[] = [];
@@ -236,6 +245,59 @@ async function syncTable(
     }
     plans.push(plan);
   }
+
+  // SKIP WHAT THE DATABASE WOULD REFUSE, rather than letting it abort a batch.
+  //
+  // A NOT NULL violation raises. That rolls back the whole 200-row
+  // transaction and fails the run, so one abandoned record in Airtable stops
+  // a load of 18,803 — which is exactly what it did on the first attempt at
+  // client_companies, after 200 rows had already committed.
+  //
+  // Runs AFTER link resolution, because a link that did not resolve is how
+  // deliverables.project_id becomes null, and that is the case worth
+  // catching rather than a mapping that was never populated.
+  const required = await requiredColumns(db, key);
+  const unmapped = required.filter((c) => !columnsFor(t).includes(c));
+  if (unmapped.length) {
+    // Nothing would ever write these, so every row would fail. Said once,
+    // before the first batch, rather than 200 rows into a transaction.
+    throw new Error(
+      `${key}: the database requires ${unmapped.join(', ')} but the field map never writes ` +
+        'them; every insert would fail. Map them, give them a default, or make them nullable.'
+    );
+  }
+
+  const writable: RowPlan[] = [];
+  for (const plan of plans) {
+    const missing = required.filter((c) => {
+      const at = plan.columns.indexOf(c);
+      return at >= 0 && (plan.values[at] === null || plan.values[at] === undefined);
+    });
+    if (missing.length === 0) {
+      writable.push(plan);
+      continue;
+    }
+    result.skipped++;
+    const known = KNOWN_SKIPS[plan.airtableRecordId];
+    issues.push({
+      recordId: plan.airtableRecordId,
+      issue: {
+        kind: 'coercion_failed',
+        field: missing.join(', '),
+        airtableValue: null,
+        detail:
+          `skipped: ${missing.join(', ')} would be null and the database requires a value. ` +
+          'The record was NOT written, because a NOT NULL violation aborts the whole batch ' +
+          'rather than failing one row.' +
+          (known ? ` ${known}` : ''),
+      },
+    });
+  }
+  if (result.skipped) {
+    log(`${key}: skipped ${result.skipped} record(s) the database would have refused`);
+  }
+  plans.length = 0;
+  plans.push(...writable);
 
   // After link resolution, so a rendered row shows the uuid a link became
   // rather than the Airtable id it started as. On a dry run that uuid is the
@@ -359,6 +421,7 @@ async function syncJoin(
     unresolvedParents: 0,
     anomalies: 0,
     blocked: 0,
+    skipped: 0,
   };
 
   const parentKeys = keys.get(parent.key);
@@ -497,6 +560,27 @@ async function existingKeyMap(db: Db, table: TableKey, ids: string[]): Promise<M
 }
 
 /**
+ * Columns the database will refuse to accept as null.
+ *
+ * Read from information_schema rather than declared in the field map, so it
+ * cannot drift from the schema. A migration that adds a NOT NULL column is
+ * reflected on the next run without anyone remembering to update a list —
+ * which is the failure this project has hit six times in other forms.
+ *
+ * Columns WITH a default are excluded: Postgres fills those, and naming them
+ * would skip records over a value the database was always going to supply.
+ */
+async function requiredColumns(db: Db, table: TableKey): Promise<string[]> {
+  const res = await db.query(
+    `select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = $1
+        and is_nullable = 'NO' and column_default is null`,
+    [table]
+  );
+  return res.rows.map((r) => String(r.column_name));
+}
+
+/**
  * The tables to sync, always in LOAD_ORDER.
  *
  * Intersecting rather than using the caller's order is the whole safety of
@@ -551,8 +635,8 @@ async function recordTable(db: Db, runId: string, r: TableResult): Promise<void>
   await db.query(
     `insert into sync_run_tables
        (run_id, table_name, read_from_airtable, inserted, updated, unchanged,
-        would_insert_existing, unresolved_parents, anomalies, blocked)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        would_insert_existing, unresolved_parents, anomalies, blocked, skipped)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      on conflict (run_id, table_name) do update set
        read_from_airtable = excluded.read_from_airtable,
        inserted = excluded.inserted, updated = excluded.updated,
@@ -560,9 +644,10 @@ async function recordTable(db: Db, runId: string, r: TableResult): Promise<void>
        would_insert_existing = excluded.would_insert_existing,
        unresolved_parents = excluded.unresolved_parents,
        anomalies = excluded.anomalies,
-       blocked = excluded.blocked`,
+       blocked = excluded.blocked,
+       skipped = excluded.skipped`,
     [runId, r.table, r.readFromAirtable, r.inserted, r.updated, r.unchanged,
-     r.wouldInsertExisting, r.unresolvedParents, r.anomalies, r.blocked]
+     r.wouldInsertExisting, r.unresolvedParents, r.anomalies, r.blocked, r.skipped]
   );
 }
 
@@ -679,6 +764,7 @@ function summarise(results: TableResult[]): string {
   return (
     `read ${total((r) => r.readFromAirtable)}, inserted ${total((r) => r.inserted)}, ` +
     `updated ${total((r) => r.updated)}, blocked ${total((r) => r.blocked)}, ` +
+    `skipped ${total((r) => r.skipped)}, ` +
     `unresolved links ${total((r) => r.unresolvedParents)}, anomalies ${total((r) => r.anomalies)}`
   );
 }

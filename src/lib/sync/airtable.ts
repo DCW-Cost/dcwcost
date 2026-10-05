@@ -84,6 +84,21 @@ export interface ReadOptions {
  * Fields are requested whole rather than named: a `fields[]` list of 60 names
  * makes a URL long enough to be rejected, and the map in tables.ts decides
  * what is kept anyway. The cost is bandwidth on lookup fields we discard.
+ *
+ * IF A RUN EVER DIES ON MEMORY, LOOK HERE FIRST. That cost is not uniform.
+ * DCW Project Tasks carries rollups that fan out across linked records, and
+ * one task — recXCLgbkVXQtgUlk, the non-billable bucket with 19,566 hours on
+ * it — came back as 21.8 MB of JSON for a SINGLE record, one of its rollup
+ * fields alone being 16 million characters. That was observed through the
+ * Airtable MCP server rather than this client, and the real sync reads all
+ * 5,557 tasks in about thirty seconds, so the REST API with cellFormat=json
+ * evidently returns something far smaller. But the fan-out is a property of
+ * the base, not of the client, so the ceiling is not known — and a page of
+ * 100 records is held in memory at once.
+ *
+ * The fix, if it is ever needed, is `returnFieldsByFieldId` plus a chunked
+ * `fields[]` list over several requests, not a smaller pageSize: the volume
+ * is per record, not per page.
  */
 export async function readTable(table: string, opts: ReadOptions): Promise<AirtableRecord[]> {
   const out: AirtableRecord[] = [];
