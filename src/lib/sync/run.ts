@@ -32,6 +32,24 @@ export interface SyncOptions {
   /** Read at most this many records per table. For a quick look, not for a real run. */
   sampleSize?: number;
   /**
+   * Sync only these tables. Omitted means all of LOAD_ORDER.
+   *
+   * For a first real run, which is the case this exists for: people and
+   * subconsultants are 27 rows and no other table links to them, so the
+   * write path can be proven end to end before deliverables arrives with
+   * 5,557 rows and the only column-scoped upsert in the sync.
+   *
+   * ORDER IS IGNORED. The list is intersected with LOAD_ORDER, so parents
+   * are still written before children whatever order they are named in —
+   * passing ['deliverables','projects'] does not invert the dependency.
+   *
+   * A table that is NOT selected still has its key map loaded from the
+   * mirror, so links into it resolve against rows a previous run wrote.
+   * Without that, syncing deliverables alone would report every project
+   * link unresolved and be entirely wrong about why.
+   */
+  tables?: readonly TableKey[];
+  /**
    * Airtable record ids, or any text to match against a record's field
    * values. Every match has its planned row rendered in full — see
    * renderPlan below for why counts are not enough.
@@ -72,8 +90,11 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
   const started = Date.now();
   const limiter = new RateLimiter();
 
-  const runId = await openRun(db, opts.dryRun);
-  log(`run ${runId} opened${opts.dryRun ? ' as a dry run' : ''}`);
+  const selected = selectedTables(opts.tables);
+  const skipped = LOAD_ORDER.filter((k) => !selected.includes(k));
+
+  const runId = await openRun(db, opts.dryRun, selected);
+  log(`run ${runId} opened${opts.dryRun ? ' as a dry run' : ''} over ${selected.join(', ')}`);
 
   /** airtable_record_id → mirror uuid, per table, for resolving links. */
   const keys = new Map<TableKey, Map<string, string>>();
@@ -81,8 +102,18 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
   /** Rendered rows from showRecords, appended to sync_runs.notes at the end. */
   const samples: string[] = [];
 
+  // A skipped table is not absent, it is already loaded. Reading its keys
+  // from the mirror is what keeps "unresolved" meaning "this parent is not
+  // in Airtable either" rather than "this table was not in the scope".
+  for (const key of skipped) {
+    if (opts.dryRun) continue;
+    const loaded = await loadKeyMap(db, key);
+    keys.set(key, loaded);
+    if (loaded.size) log(`${key}: not in scope; ${loaded.size} existing keys loaded for link resolution`);
+  }
+
   try {
-    for (const key of LOAD_ORDER) {
+    for (const key of selected) {
       if (Date.now() - started > RUN_BUDGET_MS) {
         throw new Error(`out of time before ${key}; ${Math.round((Date.now() - started) / 1000)}s elapsed`);
       }
@@ -93,7 +124,11 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
       }
     }
 
-    if (!opts.dryRun) await deriveGrossSf(db, runId, log);
+    // gross_sf reads deliverables and writes projects, so it means nothing
+    // unless both were in scope.
+    const bothInScope = selected.includes('deliverables') && selected.includes('projects');
+    if (!opts.dryRun && bothInScope) await deriveGrossSf(db, runId, log);
+    else if (!opts.dryRun) log('gross_sf: skipped, needs both projects and deliverables in scope');
 
     await closeRun(
       db,
@@ -449,13 +484,43 @@ async function existingKeyMap(db: Db, table: TableKey, ids: string[]): Promise<M
   return new Map(res.rows.map((r) => [String(r.airtable_record_id), String(r.id)]));
 }
 
-async function openRun(db: Db, dryRun: boolean): Promise<string> {
+/**
+ * The tables to sync, always in LOAD_ORDER.
+ *
+ * Intersecting rather than using the caller's order is the whole safety of
+ * this option: a child written before its parent would resolve no links, and
+ * the list arrives from an HTTP body where nothing guarantees sensible order.
+ */
+export function selectedTables(requested?: readonly TableKey[]): TableKey[] {
+  if (!requested?.length) return [...LOAD_ORDER];
+  const unknown = requested.filter((k) => !LOAD_ORDER.includes(k));
+  if (unknown.length) {
+    throw new Error(`unknown table(s): ${unknown.join(', ')}. Known: ${LOAD_ORDER.join(', ')}`);
+  }
+  return LOAD_ORDER.filter((k) => requested.includes(k));
+}
+
+/** Every airtable_record_id → uuid already in a mirror table. */
+async function loadKeyMap(db: Db, table: TableKey): Promise<Map<string, string>> {
   const res = await db.query(
-    `insert into sync_runs (scope, dry_run, notes) values ('phase1', $1, $2) returning id`,
+    `select airtable_record_id, id from ${table} where airtable_record_id is not null`
+  );
+  return new Map(res.rows.map((r) => [String(r.airtable_record_id), String(r.id)]));
+}
+
+async function openRun(db: Db, dryRun: boolean, selected: readonly TableKey[]): Promise<string> {
+  const whole = selected.length === LOAD_ORDER.length;
+  const res = await db.query(
+    // NEVER 'full'. sweep_missing_from_airtable() refuses any scope that is
+    // not exactly 'full', and phase one reads six of fourteen tables, so it
+    // genuinely cannot say what is missing. A narrower scope must not read
+    // as a wider one, which is why the table list goes in verbatim.
+    `insert into sync_runs (scope, dry_run, notes) values ($1, $2, $3) returning id`,
     [
+      whole ? 'phase1' : `phase1:${selected.join('+')}`,
       dryRun,
-      `phase one: ${LOAD_ORDER.join(', ')}. Partial scope, so the sweep will refuse this run — ` +
-        'nothing marks vanished rows until phase two makes it a full pass.',
+      `${whole ? 'phase one' : 'partial'}: ${selected.join(', ')}. Partial scope, so the sweep will ` +
+        'refuse this run — nothing marks vanished rows until phase two makes it a full pass.',
     ]
   );
   return String(res.rows[0].id);

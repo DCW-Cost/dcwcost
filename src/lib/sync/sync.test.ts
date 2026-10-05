@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
 import { LOAD_ORDER, spec, TABLES } from './tables.ts';
-import { renderPlan } from './run.ts';
+import { renderPlan, selectedTables } from './run.ts';
 import { readFileSync } from 'node:fs';
 
 // ---------------------------------------------------------------- coercion
@@ -507,6 +507,48 @@ test('a link that did not resolve is named, not silently null', () => {
   };
   const out = renderPlan(spec('deliverables'), planRow(spec('deliverables'), record), record);
   assert.match(out, /project_id = UNRESOLVED \(recMISSING0000000 not found in projects\)/);
+});
+
+// ------------------------------------------------------------ run scope
+
+test('a scoped run writes parents before children whatever order is asked', () => {
+  // The list arrives from an HTTP body, where nothing guarantees sensible
+  // order. A child written before its parent resolves no links at all, so
+  // the request is intersected with LOAD_ORDER rather than trusted.
+  assert.deepEqual(selectedTables(['deliverables', 'projects']), ['projects', 'deliverables']);
+  assert.deepEqual(selectedTables(['people', 'subconsultants']), ['people', 'subconsultants']);
+  assert.deepEqual(selectedTables(), [...LOAD_ORDER]);
+  assert.deepEqual(selectedTables([]), [...LOAD_ORDER], 'empty means all, not none');
+});
+
+test('an unknown table name fails the run rather than syncing less', () => {
+  // Silently dropping a misspelling would sync fewer tables than were asked
+  // for and report success, which is the failure this whole option exists
+  // to avoid on a first real run.
+  assert.throws(() => selectedTables(['peoples' as never]), /unknown table\(s\): peoples/);
+});
+
+test('the text match only sees fields the table maps', () => {
+  // The failure this guards is the one the first dry run produced: Airtable
+  // returns every field including lookups the map ignores, so a person's
+  // record carries the name of every project they have touched. "Oregon Zoo"
+  // matched two staff and five Metro tasks that have the phrase in no column
+  // the mirror stores.
+  const record = {
+    id: 'recAAAAAAAAAAAAAA',
+    fields: {
+      'Task Name': 'Site Visit',
+      // Not in the deliverables map: a lookup Airtable sends anyway.
+      'Projects Lookup': ['Oregon Zoo Entry Plaza', 'Blue Lake Park'],
+    },
+  };
+  const t = spec('deliverables');
+  const plan = planRow(t, record);
+  const out = renderPlan(t, plan, record);
+  // The unmapped lookup must not appear in what would be written, which is
+  // the same reason it must not drive a match.
+  assert.ok(!out.includes('Oregon Zoo'), 'an unmapped lookup is not written');
+  assert.match(out, /task_name = "Site Visit"/);
 });
 
 // ------------------------------------------- createdTime is not a field
