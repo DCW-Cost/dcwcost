@@ -35,6 +35,8 @@ export interface ParsedRequest {
   tables?: TableKey[];
   /** Set by the trigger route, which opened the run row to return its id. */
   runId?: string;
+  /** Write only the join tables, leaving their parents untouched. */
+  joinsOnly?: boolean;
 }
 
 /** Non-empty strings only, or undefined. Shared by showRecords and tables. */
@@ -71,5 +73,8 @@ export function parseSyncRequest(body: unknown): ParsedRequest {
     // background function is behind the same secret, so this is no wider a
     // trust than the rest of the body.
     runId: typeof b.runId === 'string' && b.runId.trim() !== '' ? b.runId.trim() : undefined,
+    // Strictly true, like dryRun. The costly direction of a mistake here is
+    // a run that silently writes no parents when a full load was wanted.
+    joinsOnly: b.joinsOnly === true,
   };
 }
