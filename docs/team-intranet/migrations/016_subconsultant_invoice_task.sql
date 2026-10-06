@@ -1,0 +1,138 @@
+-- ============================================================================
+-- 016 — three corrections the phase-two rehearsal found
+--
+-- The rehearsal was three tiny tables — subconsultant_tasks (13 rows),
+-- subconsultant_invoices (12) and bid_results (8), 69 Airtable fields
+-- between them — chosen because they are the cheapest possible full pass
+-- over the pipeline on tables nobody depends on yet.
+--
+-- It found three things, and this migration is the part that belongs in the
+-- schema rather than in a field map.
+--
+-- ============================================================================
+-- 1 — subconsultant_invoices: the Task link points somewhere else
+--
+-- Airtable:  Subconsultant Invoices."Task"  -->  SUBCONSULTANT TASKS
+-- Postgres:  subconsultant_invoices.deliverable_id  -->  deliverables
+--
+-- An invoice's "Task" is a subconsultant task, not a DCW project task. The
+-- column waiting for that link references the wrong table, so the one real
+-- relationship this table has could not be written at all.
+--
+-- Found by checking what the field POINTS AT rather than what it is called,
+-- which is the same check that caught "Subconsultants" on DCW Project Tasks
+-- pointing at Subconsultant Tasks during phase one. Two of the four link
+-- fields across these three tables are named for something other than their
+-- target; one of those two is a genuine mismatch. Phase one's error rate
+-- was three in 126 fields. This pass is running higher.
+--
+-- THE REJECTED ALTERNATIVE IS WORTH RECORDING. deliverable_id could have
+-- been filled by following the subconsultant task to its deliverable. That
+-- fills the column that exists, and it is wrong for the same reason a
+-- synthetic "Non-project Work" project would have been wrong: it asserts a
+-- link the source does not, and it discards which subconsultant task the
+-- invoice was actually for. A column is not a reason to invent data.
+--
+-- ON DELETE SET NULL, not CASCADE: an invoice is a financial record and
+-- must outlive the task it was raised against.
+-- ============================================================================
+
+alter table subconsultant_invoices
+  add column if not exists subconsultant_task_id uuid
+    references subconsultant_tasks(id) on delete set null;
+
+-- THE GRANT IS NOT OPTIONAL HERE, and this is the case 014 did not have.
+-- UPDATE on this table is COLUMN-LEVEL, not table-level: airtable_sync holds
+-- INSERT and SELECT on the table and UPDATE on eleven named columns. A new
+-- column is therefore NOT writable by default, and the sync would fail on
+-- it. 014 needed no grant because that table's UPDATE was table-level —
+-- which is why the rule is to check, not to remember what happened last time.
+grant update (subconsultant_task_id) on subconsultant_invoices to airtable_sync;
+
+-- DROPPED, not left unmapped. Nothing can write it now, and a column with no
+-- writer is one somebody later fills from somewhere. "Left unmapped" is a
+-- fact that lives in a field map; absence is a fact that lives in the schema,
+-- where it cannot drift. The deliverable remains reachable through
+-- subconsultant_task_id -> subconsultant_tasks.deliverable_id, so nothing is
+-- lost but a shortcut nobody had.
+--
+-- Free to drop: the table holds 0 rows and no code references the column.
+alter table subconsultant_invoices drop column if exists deliverable_id;
+
+-- ============================================================================
+-- 2 — bid_results.bids_received is not a number
+--
+-- Airtable's "# of Bids Recieved" (sic) is a singleSelect whose choices are
+-- 1 through 9 and "10 or more". Against an integer column, "10 or more"
+-- either fails to coerce or silently becomes 10 — and the second is worse,
+-- because a bid count of exactly 10 is plausible and nobody would question
+-- it.
+--
+-- The column type is wrong, not the data. Eight rows is the cheapest moment
+-- this will ever be changed.
+-- ============================================================================
+
+alter table bid_results alter column bids_received type text using bids_received::text;
+
+-- ============================================================================
+-- VERIFICATION
+--
+-- Uncomment and run as a second query. Every row should read exactly this:
+--
+--   subconsultant_task_id exists      uuid
+--   it references subconsultant_tasks true
+--   on delete set null                SET NULL
+--   SYNC CAN UPDATE IT                true
+--   deliverable_id gone               true
+--   bids_received is text             text
+--   sync can still update bids_recd   true
+--   invoice rows preserved            0
+--
+-- "SYNC CAN UPDATE IT" is the row this migration exists to prove. The column
+-- is useless without the grant, and the failure would appear as a sync that
+-- writes every other field and silently never that one — because UPDATE on
+-- this table is column-level, which 014's table was not.
+--
+-- "sync can still update bids_recd" is not padding either: ALTER COLUMN TYPE
+-- rewrites the column, and a column-level privilege that did not survive
+-- would be invisible until the first run that tried to write it.
+--
+-- Run against production before committing, per the standing practice.
+-- ============================================================================
+--
+-- select 'subconsultant_task_id exists' as item,
+--        coalesce((select data_type from information_schema.columns
+--                   where table_schema='public' and table_name='subconsultant_invoices'
+--                     and column_name='subconsultant_task_id'), 'MISSING') as value
+-- union all select 'it references subconsultant_tasks',
+--        exists (select 1 from pg_constraint c
+--                  join unnest(c.conkey) k(attnum) on true
+--                  join pg_attribute a on a.attrelid=c.conrelid and a.attnum=k.attnum
+--                 where c.contype='f' and c.conrelid='subconsultant_invoices'::regclass
+--                   and a.attname='subconsultant_task_id'
+--                   and c.confrelid='subconsultant_tasks'::regclass)::text
+-- union all select 'on delete set null',
+--        coalesce((select case c.confdeltype when 'n' then 'SET NULL' when 'c' then 'CASCADE'
+--                              when 'a' then 'NO ACTION' when 'r' then 'RESTRICT' else '?' end
+--                    from pg_constraint c
+--                    join unnest(c.conkey) k(attnum) on true
+--                    join pg_attribute a on a.attrelid=c.conrelid and a.attnum=k.attnum
+--                   where c.contype='f' and c.conrelid='subconsultant_invoices'::regclass
+--                     and a.attname='subconsultant_task_id'), 'MISSING')
+-- union all select 'SYNC CAN UPDATE IT',
+--        has_column_privilege('airtable_sync','subconsultant_invoices',
+--                             'subconsultant_task_id','UPDATE')::text
+-- union all select 'deliverable_id gone',
+--        (not exists (select 1 from information_schema.columns
+--                      where table_schema='public' and table_name='subconsultant_invoices'
+--                        and column_name='deliverable_id'))::text
+-- union all select 'bids_received is text',
+--        (select data_type from information_schema.columns
+--          where table_schema='public' and table_name='bid_results'
+--            and column_name='bids_received')
+-- union all select 'sync can still update bids_recd',
+--        has_column_privilege('airtable_sync','bid_results','bids_received','UPDATE')::text
+-- union all select 'invoice rows preserved',
+--        (select count(*)::text from subconsultant_invoices);
+--
+-- ============================================================================
