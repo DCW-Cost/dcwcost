@@ -137,14 +137,15 @@ export function maxRowsPerStatement(spec: TableSpec): number {
 /**
  * One statement that upserts many rows.
  *
- * The sync wrote one row per round trip, which measured about 17 rows a
- * second — fine for 5,556 deliverables and impossible for 29,119 time
- * entries, which would need 28 minutes against a 15-minute function limit.
+ * The sync wrote one row per round trip, which measured 16.3 rows a second
+ * — fine for 5,556 deliverables and impossible for 29,119 time entries,
+ * which would have needed 28 minutes against a 15-minute function limit.
  * That rate was the shape of the writes, not a property of the data.
  *
- * The 17/sec figure describes what this replaced. It has deliberately not
- * been updated with a guess: the new rate is a measurement nobody has
- * taken yet.
+ * MEASURED AFTER THIS CHANGE: 164 rows/sec. Both runs on 6 October 2026
+ * over the same tables — 10,942 rows in 671 seconds per row, then 16,603
+ * rows in 101 seconds batched. The tenfold gap is real; it is written down
+ * with both figures so nobody reads it as a typo.
  *
  * RETURNING CARRIES airtable_record_id, AND THAT IS NOT DECORATION. The
  * order of returned rows is unspecified, so there is no positional
