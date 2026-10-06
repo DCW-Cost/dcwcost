@@ -17,7 +17,18 @@ import type { Db } from './db.ts';
 import { inTransaction } from './db.ts';
 import { RateLimiter, streamTable, type AirtableRecord } from './airtable.ts';
 import { KNOWN_SKIPS, LOAD_ORDER, spec, TABLES, type JoinSpec, type TableKey, type TableSpec } from './tables.ts';
-import { buildJoinUpsert, buildUpsert, columnsFor, planJoins, planRow, type Issue, type RowPlan } from './plan.ts';
+import {
+  buildBatchJoinUpsert,
+  buildBatchUpsert,
+  buildJoinUpsert,
+  buildUpsert,
+  columnsFor,
+  maxRowsPerStatement,
+  planJoins,
+  planRow,
+  type Issue,
+  type RowPlan,
+} from './plan.ts';
 
 /** Upserts per transaction. Small enough to stay well inside the 60 s idle limit. */
 const BATCH = 200;
@@ -31,11 +42,16 @@ const BATCH = 200;
  *   seconds earlier, when the trigger opens it, so a row showing ~15:15 is a
  *   function that got its full fifteen.
  *
- *   write rate is about 20 rows/sec on narrow tables (contacts, 12 columns)
- *   and about 17 on deliverables (60 columns). 16,592 rows took ~15 minutes
- *   and did not finish. That is the number to size phase two's 14 tables
- *   against — not a guess, and not the dry-run rate, which only counts rows
- *   and is an order of magnitude faster.
+ *   write rate was about 20 rows/sec on narrow tables and 17 on
+ *   deliverables, with 16,592 rows taking ~15 minutes and not finishing.
+ *
+ *   THAT FIGURE IS HISTORICAL AND HAS NOT BEEN RE-MEASURED. It was one
+ *   round trip per row, which batched inserts replaced; the real rate is
+ *   now expected to be an order of magnitude higher and nobody has checked.
+ *   It is left here only because phase two would otherwise be sized against
+ *   a number with no provenance at all — but sizing anything against this
+ *   one without re-measuring first would be sizing against a fact that
+ *   stopped being true.
  *
  * THE BUDGET ONLY WORKS IF IT IS CHECKED. On that run it never fired,
  * because it was checked between tables in LOAD_ORDER and nowhere else, and
@@ -287,6 +303,19 @@ async function syncTable(
     log(`${key}: joinsOnly — parent not written, ${parentKeys.size} existing keys loaded`);
   }
 
+  // DERIVED FROM THE COLUMN COUNT, not assumed. Postgres accepts 65,535
+  // bind parameters per statement and a batch spends rows x columns of
+  // them, so a wide table has a lower ceiling: deliverables' 61 columns cap
+  // it at 1,092 rows where contacts' 13 allow 5,041.
+  //
+  // LOGGED, not merely computed. A future table wide enough to drop the
+  // batch to 40 rows would make a run six times slower with nothing on
+  // screen to explain why.
+  const batchRows = Math.min(BATCH, maxRowsPerStatement(t));
+  if (!opts.dryRun && !opts.joinsOnly) {
+    log(`${key}: writing in batches of ${batchRows} (${columnsFor(t).length} columns)`);
+  }
+
   const joins = t.joins ?? [];
   const joinResults = new Map<string, TableResult>(
     joins.map((j) => [
@@ -306,8 +335,7 @@ async function syncTable(
     ])
   );
 
-  const upsertSql = buildUpsert(t);
-  const joinSql = new Map(joins.map((j) => [j.table, buildJoinUpsert(j)]));
+  const JOIN_BATCH_ROWS = Math.min(BATCH, Math.floor(65535 / 2));
 
   // Totalled across pages, because the per-page line alone cannot answer
   // the question the measurement exists for: whether memory tracks RECORDS
@@ -466,37 +494,92 @@ async function syncTable(
         parentKeys.set(p.airtableRecordId, `${DRY}-${p.airtableRecordId}`);
       }
     } else {
-      // One transaction per page. A failure rolls back 100 rows rather than
-      // 200, which is strictly better for recovery, and at ~20 rows/sec the
-      // commit count is nowhere near the bottleneck.
-      await inTransaction(db, async () => {
-        for (const p of writable) {
-          const res = await db.query(upsertSql, p.values);
-          if (!res.rowCount) {
-            // The DO UPDATE's WHERE excluded it, or a policy did. Either way
-            // the row was not written and nothing errored, which is precisely
-            // the failure mode worth counting. No id comes back, so no join
-            // row is written for it either — the same outcome as before.
-            result.blocked++;
-            issues.push({
-              recordId: p.airtableRecordId,
-              issue: {
-                kind: 'coercion_failed',
-                field: '(row)',
-                airtableValue: p.airtableRecordId,
-                detail:
-                  'upsert affected 0 rows — a matching row exists that this sync does not own ' +
-                  `(${t.restrictUpdateTo ?? 'no restriction'}), or a policy refused it`,
-              },
-            });
-            continue;
-          }
-          const row = res.rows[0] ?? {};
+      // ONE STATEMENT PER PAGE, not one per row.
+      //
+      // Deduped by key first, because `ON CONFLICT DO UPDATE` refuses when
+      // the same key appears twice in one statement — "cannot affect row a
+      // second time". That cannot happen one row at a time, so it is a new
+      // failure mode and it is recorded rather than quietly collapsed: a
+      // duplicate means Airtable returned one or our paging overlapped, and
+      // which of those it is matters.
+      const byKey = new Map<string, RowPlan>();
+      for (const p of writable) {
+        const seen = byKey.get(p.airtableRecordId);
+        if (seen) {
+          issues.push({
+            recordId: p.airtableRecordId,
+            issue: {
+              kind: 'coercion_failed',
+              field: 'airtable_record_id',
+              airtableValue: p.airtableRecordId,
+              detail:
+                'the same Airtable record id appeared twice while reading this table, so the ' +
+                'second copy was dropped before writing. One statement cannot upsert the same ' +
+                'key twice. Either Airtable returned the record twice or a page boundary ' +
+                'overlapped — both are worth knowing about.',
+            },
+          });
+          continue;
+        }
+        byKey.set(p.airtableRecordId, p);
+      }
+      const unique = [...byKey.values()];
+
+      for (let i = 0; i < unique.length; i += batchRows) {
+        const slice = unique.slice(i, i + batchRows);
+        const sql = buildBatchUpsert(t, slice.length);
+        const params = slice.flatMap((p) => p.values);
+
+        let returned;
+        try {
+          returned = await inTransaction(db, () => db.query(sql, params));
+        } catch (err) {
+          // The transaction is already rolled back. Find every bad row,
+          // writing nothing, so the failure names records rather than a
+          // constraint. Previously a throw identified one row because each
+          // was sent separately; this finds them all on purpose.
+          const bad = await findOffendingRows(
+            db,
+            buildUpsert(t),
+            slice.map((p) => ({ recordId: p.airtableRecordId, values: p.values }))
+          );
+          const named = bad.length
+            ? bad.map((b) => `${b.recordId}: ${b.message}`).join('; ')
+            : 'no single row reproduced it, so the batch itself is at fault';
+          throw new Error(
+            `${key}: a batch of ${slice.length} rows failed. ${bad.length} offending row(s) — ${named}`
+          );
+        }
+
+        // RETURNING ORDER IS UNSPECIFIED, so rows are matched by key and
+        // never by position. A row the DO UPDATE's WHERE or a policy
+        // excluded simply does not come back, which makes `blocked` the set
+        // difference — and names the records, where counting rowCount could
+        // only say how many.
+        const wrote = new Set<string>();
+        for (const row of returned.rows ?? []) {
+          const recordId = String(row.airtable_record_id);
+          wrote.add(recordId);
           if (row.inserted) result.inserted++;
           else result.updated++;
-          if (row.id) parentKeys.set(p.airtableRecordId, String(row.id));
+          if (row.id) parentKeys.set(recordId, String(row.id));
         }
-      });
+        for (const p of slice) {
+          if (wrote.has(p.airtableRecordId)) continue;
+          result.blocked++;
+          issues.push({
+            recordId: p.airtableRecordId,
+            issue: {
+              kind: 'coercion_failed',
+              field: '(row)',
+              airtableValue: p.airtableRecordId,
+              detail:
+                'upsert returned no row — a matching row exists that this sync does not own ' +
+                `(${t.restrictUpdateTo ?? 'no restriction'}), or a policy refused it`,
+            },
+          });
+        }
+      }
     }
 
     // ---- join rows for this page, now that their parents have uuids ----
@@ -544,14 +627,45 @@ async function syncTable(
       if (opts.dryRun) {
         jr.inserted += pairs.length;
       } else if (pairs.length) {
-        await inTransaction(db, async () => {
-          for (const [parentUuid, childUuid] of pairs) {
-            const res = await db.query(joinSql.get(join.table)!, [parentUuid, childUuid]);
-            if (!res.rowCount) jr.blocked++;
-            else if (res.rows[0]?.inserted) jr.inserted++;
-            else jr.updated++;
-          }
+        // Deduped for the same reason as the parents: one statement cannot
+        // upsert the same (parent, child) twice. A repeat here is benign —
+        // the link is recorded once either way — so it is dropped without
+        // an anomaly, unlike a duplicate parent key, which says something
+        // about the source.
+        const seenPairs = new Set<string>();
+        const uniquePairs = pairs.filter(([a, b]) => {
+          const k = `${a}|${b}`;
+          if (seenPairs.has(k)) return false;
+          seenPairs.add(k);
+          return true;
         });
+
+        for (let i = 0; i < uniquePairs.length; i += JOIN_BATCH_ROWS) {
+          const slice = uniquePairs.slice(i, i + JOIN_BATCH_ROWS);
+          const sql = buildBatchJoinUpsert(join, slice.length);
+          const params = slice.flat();
+          try {
+            const res = await inTransaction(db, () => db.query(sql, params));
+            const returnedCount = (res.rows ?? []).length;
+            for (const row of res.rows ?? []) {
+              if (row.inserted) jr.inserted++;
+              else jr.updated++;
+            }
+            jr.blocked += slice.length - returnedCount;
+          } catch (err) {
+            const bad = await findOffendingRows(
+              db,
+              buildJoinUpsert(join),
+              slice.map(([a, b]) => ({ recordId: `${a} -> ${b}`, values: [a, b] }))
+            );
+            const named = bad.length
+              ? bad.map((x) => `${x.recordId}: ${x.message}`).join('; ')
+              : 'no single pair reproduced it';
+            throw new Error(
+              `${join.table}: a batch of ${slice.length} links failed. ${bad.length} offending — ${named}`
+            );
+          }
+        }
       }
 
       if (joinIssues.length) {
@@ -658,6 +772,49 @@ async function existingKeys(db: Db, table: TableKey, ids: string[]): Promise<Set
     [ids]
   );
   return new Set(res.rows.map((r) => String(r.airtable_record_id)));
+}
+
+/** Rows that could not be written, with the error each one produced. */
+export interface RowFailure {
+  index: number;
+  recordId: string;
+  message: string;
+}
+
+/**
+ * Replay a failed batch one row at a time, writing nothing.
+ *
+ * Savepoints rather than separate transactions: a row that succeeds here
+ * must not commit, or diagnosing a failure would write a partial batch as
+ * a side effect of looking at it.
+ */
+export async function findOffendingRows(
+  db: Db,
+  sql: string,
+  rows: Array<{ recordId: string; values: unknown[] }>
+): Promise<RowFailure[]> {
+  const failures: RowFailure[] = [];
+  await db.query('begin');
+  try {
+    for (let i = 0; i < rows.length; i++) {
+      await db.query('savepoint probe');
+      try {
+        await db.query(sql, rows[i].values);
+        await db.query('release savepoint probe');
+      } catch (err) {
+        await db.query('rollback to savepoint probe').catch(() => {});
+        failures.push({
+          index: i,
+          recordId: rows[i].recordId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } finally {
+    // Always. Nothing found here is kept — this is diagnosis, not a retry.
+    await db.query('rollback').catch(() => {});
+  }
+  return failures;
 }
 
 /**

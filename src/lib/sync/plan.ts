@@ -118,6 +118,89 @@ export function buildUpsert(spec: TableSpec): string {
 }
 
 /**
+ * Postgres accepts at most 65,535 bind parameters in one statement, and a
+ * batch of N rows uses N x columns of them. Exceeding it is an error at
+ * execution, so the batch size is derived from the table rather than
+ * assumed: deliverables has 61 columns and tops out at 1,074 rows a
+ * statement, contacts at 5,041.
+ *
+ * Derived and then LOGGED, because a future table wide enough to drop the
+ * batch to 40 rows would make a run six times slower with nothing to show
+ * why. A number you can read beats one you infer from a duration.
+ */
+const PG_MAX_PARAMS = 65535;
+
+export function maxRowsPerStatement(spec: TableSpec): number {
+  return Math.max(1, Math.floor(PG_MAX_PARAMS / Math.max(columnsFor(spec).length, 1)));
+}
+
+/**
+ * One statement that upserts many rows.
+ *
+ * The sync wrote one row per round trip, which measured about 17 rows a
+ * second — fine for 5,556 deliverables and impossible for 29,119 time
+ * entries, which would need 28 minutes against a 15-minute function limit.
+ * That rate was the shape of the writes, not a property of the data.
+ *
+ * The 17/sec figure describes what this replaced. It has deliberately not
+ * been updated with a guess: the new rate is a measurement nobody has
+ * taken yet.
+ *
+ * RETURNING CARRIES airtable_record_id, AND THAT IS NOT DECORATION. The
+ * order of returned rows is unspecified, so there is no positional
+ * correspondence between what went in and what comes back; matching on the
+ * key is the only correct way to learn which uuid belongs to which record.
+ *
+ * A row excluded by the DO UPDATE's WHERE, or by a policy, simply does not
+ * come back. That makes `blocked` the set difference — sent minus returned
+ * — which names the records rather than counting them, where the
+ * one-row-at-a-time version could only say how many.
+ */
+export function buildBatchUpsert(spec: TableSpec, rowCount: number): string {
+  const cols = columnsFor(spec);
+  const n = cols.length;
+  const tuples: string[] = [];
+  for (let r = 0; r < rowCount; r++) {
+    const ph = cols.map((_, i) => `$${r * n + i + 1}`);
+    tuples.push(`(${ph.join(', ')}, now())`);
+  }
+
+  const conditional = new Map<string, FieldSpec>();
+  for (const f of spec.fields) if (f.writeWhen === 'if_null_or_equal') conditional.set(f.to, f);
+
+  const sets = updatedColumns(spec).map((c) =>
+    conditional.has(c)
+      ? `${c} = case when ${spec.key}.${c} is null or ${spec.key}.${c} = excluded.${c} ` +
+        `then excluded.${c} else ${spec.key}.${c} end`
+      : `${c} = excluded.${c}`
+  );
+  sets.push(`${SYNCED_AT} = now()`);
+
+  const where = spec.restrictUpdateTo ? ` where ${spec.restrictUpdateTo}` : '';
+
+  return [
+    `insert into ${spec.key} (${cols.join(', ')}, ${SYNCED_AT})`,
+    `values ${tuples.join(', ')}`,
+    `on conflict (airtable_record_id) do update set ${sets.join(', ')}${where}`,
+    `returning airtable_record_id, id, (xmax = 0) as inserted`,
+  ].join('\n');
+}
+
+/** As buildBatchUpsert, for a join table's (parent, child) pairs. */
+export function buildBatchJoinUpsert(join: JoinSpec, pairCount: number): string {
+  const tuples: string[] = [];
+  for (let r = 0; r < pairCount; r++) {
+    tuples.push(`($${r * 2 + 1}, $${r * 2 + 2}, now())`);
+  }
+  return [
+    `insert into ${join.table} (${join.parentColumn}, ${join.childColumn}, synced_at)`,
+    `values ${tuples.join(', ')}`,
+    `on conflict (${join.parentColumn}, ${join.childColumn}) do update set synced_at = now()`,
+    `returning ${join.parentColumn}, ${join.childColumn}, (xmax = 0) as inserted`,
+  ].join('\n');
+}
+
+/**
  * completed_at, derived rather than mapped.
  *
  * Migration 007's trigger fires on UPDATE only, so nothing stamps a row that
