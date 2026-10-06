@@ -153,7 +153,12 @@ test('synced_at is stamped on every touched row, including unchanged ones', () =
 test('the upsert matches on the unique key and reports which way it went', () => {
   const sql = buildUpsert(spec('people'));
   assert.match(sql, /on conflict \(airtable_record_id\) do update set/);
-  assert.match(sql, /returning \(xmax = 0\) as inserted/);
+  assert.match(sql, /returning id, \(xmax = 0\) as inserted/);
+  // `id` is load-bearing, not decoration: without it the uuid of a row just
+  // written is unknown, the run has to recover uuids from the whole id list
+  // afterwards, and the whole table stays in memory to supply it. Removing
+  // it would not fail any other test and would quietly restore the ceiling.
+  assert.match(sql, /returning id/, 'the upsert must return the uuid it wrote');
 });
 
 test('a shared column yields rather than overwrites when it disagrees', () => {
@@ -381,7 +386,11 @@ test('a join row re-stamps synced_at rather than doing nothing', () => {
   // failed to see. A link left unstamped looks like a link that vanished.
   const sql = buildJoinUpsert(spec('projects').joins![0]);
   assert.match(sql, /on conflict \(project_id, contact_id\) do update set synced_at = now\(\)/);
+  // No `id` here, unlike the parent upsert. A join row's uuid is never
+  // needed — nothing resolves against it — so returning one would be a
+  // column fetched for no reader.
   assert.match(sql, /returning \(xmax = 0\) as inserted/);
+  assert.ok(!/returning id/.test(sql), 'a join row has no uuid anybody needs');
 });
 
 // ------------------------------------------------------- the bundler gap
@@ -859,9 +868,17 @@ test('the skip check runs after link resolution, not before', () => {
   // before that, every deliverable would look unwritable; checked after, only
   // the ones whose project genuinely did not resolve do.
   const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  // requiredColumns is now fetched once before the first page, so its
+  // position no longer says anything. What matters is the order INSIDE the
+  // page handler: resolve links, then decide what the database would refuse.
   const resolve = src.indexOf('result.unresolvedParents++');
-  const skip = src.indexOf('const required = await requiredColumns');
-  assert.ok(resolve > 0 && skip > resolve, 'the skip pass must come after resolution');
+  const skip = src.indexOf('const writable: RowPlan[] = [];');
+  assert.ok(resolve > 0, 'link resolution must exist');
+  assert.ok(skip > resolve, 'the skip pass must come after resolution');
+  // And the fatal check must stay out of the page loop entirely.
+  const req = src.indexOf('const required = await requiredColumns');
+  const stream = src.indexOf('await streamTable(');
+  assert.ok(req > 0 && req < stream, 'requiredColumns must be fetched before the first page');
 });
 
 test('the non-billable bucket records why skipping it defers a problem', () => {
@@ -911,15 +928,19 @@ test('joinsOnly loads parent keys instead of writing parents', () => {
   assert.match(src, /opts\.joinsOnly \? \[\] : \[result\]/);
 });
 
-test('the time budget is checked before each join table, not only between tables', () => {
+test('the time budget is checked inside the page loop', () => {
   // The 5 October run died inside deliverables' join tables with the budget
   // never consulted: it was checked in the LOAD_ORDER loop and nowhere else,
   // so a table whose joins are 5,377 writes could overrun without ever
   // asking. The run row was left saying `running` because closeRun never ran.
+  //
+  // Now that a table is written page by page, per page is the right place —
+  // it is checked more often than per join was, and it covers the parent
+  // writes as well as the join writes.
   const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
-  const joinLoop = src.slice(src.indexOf('for (const join of t.joins'));
-  assert.match(joinLoop.slice(0, 700), /RUN_BUDGET_MS/, 'the join loop must check the budget');
-  assert.match(joinLoop.slice(0, 900), /joinsOnly/, 'and say how to finish the run');
+  const handler = src.slice(src.indexOf('}, async (page) => {'));
+  assert.match(handler.slice(0, 900), /RUN_BUDGET_MS/, 'the page handler must check the budget');
+  assert.match(handler.slice(0, 1200), /Re-run the same scope/, 'and say how to recover');
 });
 
 test('measure is parsed and reaches the runner', async () => {
@@ -958,4 +979,78 @@ test('a dry run loads out-of-scope parent keys, like a real run does', () => {
   const body = loop.slice(0, loop.indexOf('\n  }') + 1);
   assert.ok(!/if \(opts\.dryRun\) continue;/.test(body), 'must not skip key loading on a dry run');
   assert.match(body, /loadKeyMap\(db, key\)/);
+});
+
+// ------------------------------------------------- streaming, not holding
+
+test('nothing in syncTable holds the whole table', () => {
+  // The ceiling was never a design decision — it was `readTable` building an
+  // array because the upsert did not return the uuid it had written. 5,557
+  // deliverables is 334 MB of raw JSON, and a run measured 821 MB of 1,024.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('async function syncTable('), src.indexOf('async function deriveGrossSf'));
+  assert.ok(!/\breadTable\(/.test(fn), 'syncTable must stream, not accumulate');
+  assert.match(fn, /await streamTable\(/);
+  // The page is the unit of work; a second full pass over records for joins
+  // would put the array straight back.
+  assert.ok(!/records\.filter|records\.map|of records\)/.test(fn), 'no whole-table array may survive');
+});
+
+test('join rows are written beside their parents, from the returned uuid', () => {
+  // The structural change. Joins used to need a second pass over every
+  // record because a parent's uuid was only knowable after the fact.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  assert.match(src, /parentKeys\.set\(p\.airtableRecordId, String\(row\.id\)\)/);
+  assert.ok(!src.includes('async function syncJoin'), 'the second pass is gone');
+});
+
+test('the key map is published before the first page, and grows', () => {
+  // Later tables resolve against it while this one is still streaming, so it
+  // must be the same Map object throughout rather than replaced at the end.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('async function syncTable('), src.indexOf('async function deriveGrossSf'));
+  const publish = fn.indexOf('keys.set(key, parentKeys)');
+  const stream = fn.indexOf('await streamTable(');
+  assert.ok(publish > 0 && publish < stream, 'the map must be published before streaming starts');
+  assert.ok(!/keys\.set\(key, new Map\(/.test(fn), 'it must never be replaced wholesale');
+});
+
+test('anomalies are written per page, not once at the end', () => {
+  // A run killed mid-table used to record none at all for that table.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const handler = src.slice(src.indexOf('}, async (page) => {'), src.indexOf('log(`${key}: read ${total}'));
+  assert.match(handler, /await recordAnomalies\(db, runId, key, issues\)/);
+});
+
+test('streamTable hands over pages and keeps none of them', async () => {
+  const { streamTable } = await import('./airtable.ts');
+  const src = readFileSync(new URL('./airtable.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('export async function streamTable'));
+  assert.ok(typeof streamTable === 'function');
+  // It returns a count, not an array. Returning the records would make the
+  // caller's discipline optional, which is how this went wrong the first time.
+  assert.match(fn.slice(0, 400), /Promise<number>/);
+  assert.ok(!/out\.push/.test(fn.slice(0, 1400)), 'streamTable must not accumulate');
+});
+
+test('maxRecords trims before the handler sees the page', () => {
+  // sampleSize is how the memory baseline was measured. Handing over 100
+  // records and trimming afterwards would mean the handler had already
+  // planned and written rows the caller never asked for.
+  const src = readFileSync(new URL('./airtable.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('export async function streamTable'));
+  const trim = fn.indexOf('records = records.slice(0, opts.maxRecords - total)');
+  const hand = fn.indexOf('await onRecords(');
+  assert.ok(trim > 0 && trim < hand, 'trim must happen before the handler is called');
+});
+
+test('a join table records its own anomalies, under its own name', () => {
+  // "recX is not in contacts" filed under `projects` is a row nobody
+  // looking at project_client_contacts would ever find. The pre-streaming
+  // code got this right via a separate function; the rewrite nearly lost it
+  // by folding join issues into the parent's list.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  assert.match(src, /const joinIssues: \{ recordId: string; issue: Issue \}\[\] = \[\];/);
+  assert.match(src, /await recordAnomalies\(db, runId, join\.table, joinIssues\)/);
+  assert.match(src, /jr\.anomalies \+= joinIssues\.length/);
 });

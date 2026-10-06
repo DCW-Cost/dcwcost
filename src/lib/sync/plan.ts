@@ -107,7 +107,13 @@ export function buildUpsert(spec: TableSpec): string {
     `on conflict (airtable_record_id) do update set\n  ${sets.join(',\n  ')}${where}\n` +
     // xmax = 0 on the returned row means this was an INSERT rather than an
     // UPDATE. It is how the run counts the two apart without a second query.
-    `returning (xmax = 0) as inserted`
+    //
+    // `id` IS WHY THE SYNC CAN STREAM. Without it, the uuid of a row just
+    // written was unknown, so the run held every record in memory and
+    // recovered the uuids afterwards with one query against the whole id
+    // list — which is what made a table's size a memory ceiling. One column
+    // in a RETURNING clause was keeping 334 MB of JSON in scope.
+    `returning id, (xmax = 0) as inserted`
   );
 }
 

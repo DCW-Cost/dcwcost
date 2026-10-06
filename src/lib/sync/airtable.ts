@@ -147,6 +147,32 @@ export interface PageMeasurement {
  */
 export async function readTable(table: string, opts: ReadOptions): Promise<AirtableRecord[]> {
   const out: AirtableRecord[] = [];
+  await streamTable(table, opts, (page) => {
+    out.push(...page);
+  });
+  return out;
+}
+
+/**
+ * The same read, handed to the caller a page at a time and never kept.
+ *
+ * This is the one that matters. `readTable` accumulates, which is why a
+ * table was a memory ceiling: 5,557 tasks at ~60 KB each is 334 MB of raw
+ * JSON before anything parses it, and a run was measured at 821 MB of a
+ * 1,024 MB limit. Nothing needed the whole array — it was held because the
+ * upsert did not return the uuid it had just written, so the ids had to be
+ * looked up afterwards against the full list.
+ *
+ * The handler is awaited, so a caller can write a page before the next is
+ * fetched and the page then falls out of scope. Memory becomes flat in the
+ * size of the table rather than linear.
+ */
+export async function streamTable(
+  table: string,
+  opts: ReadOptions,
+  onRecords: (page: AirtableRecord[], soFar: number) => Promise<void> | void
+): Promise<number> {
+  let total = 0;
   let offset: string | undefined;
 
   do {
@@ -161,14 +187,22 @@ export async function readTable(table: string, opts: ReadOptions): Promise<Airta
 
     const page = await request(url, opts);
     if (page.measurement) opts.onMeasure?.(page.measurement);
-    for (const r of page.records ?? []) out.push(r);
+    let records = page.records ?? [];
     offset = page.offset;
-    opts.onPage?.(out.length);
 
-    if (opts.maxRecords && out.length >= opts.maxRecords) return out.slice(0, opts.maxRecords);
+    // Trim before handing over, so a caller never sees more than it asked
+    // for and never has to undo work it has already done.
+    if (opts.maxRecords && total + records.length >= opts.maxRecords) {
+      records = records.slice(0, opts.maxRecords - total);
+      offset = undefined;
+    }
+
+    total += records.length;
+    await onRecords(records, total);
+    opts.onPage?.(total);
   } while (offset);
 
-  return out;
+  return total;
 }
 
 interface Page {
