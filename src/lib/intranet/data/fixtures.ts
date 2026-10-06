@@ -388,6 +388,55 @@ export const fixtureProvider: DataProvider = {
       },
     ];
   },
+
+  // Invented, and shaped to look like the real thing rather than like a
+  // happy path: two clients on one project, an empty sector, a project with
+  // no tasks. The page exists to make wrong data visible, so the fixture
+  // must not be uniformly tidy or the page looks finished when it is not.
+  async listProjectSummaries() {
+    return [
+      {
+        id: 'fixture-1',
+        name: 'Community Aquatic Center — Renton',
+        clients: ['Example Architects LLP'],
+        sector: ['Community'],
+        city: ['Renton, WA'],
+        taskCount: 7,
+      },
+      {
+        id: 'fixture-2',
+        name: 'Civic Plaza Renewal',
+        clients: ['Example Architects LLP', 'Second Firm Inc'],
+        sector: ['Civic', 'Plaza'],
+        city: ['Tacoma, WA'],
+        taskCount: 3,
+      },
+      {
+        id: 'fixture-3',
+        name: 'Unnamed sector, no tasks',
+        clients: [],
+        sector: [],
+        city: ['Portland, OR'],
+        taskCount: 0,
+      },
+    ];
+  },
+
+  async listOpenAnomalies() {
+    return [
+      {
+        id: 1,
+        seenAt: '2026-10-05T22:19:05.931Z',
+        tableName: 'deliverables',
+        airtableRecordId: 'recXCLgbkVXQtgUlk',
+        kind: 'coercion_failed',
+        fieldName: 'project_id',
+        detail:
+          'skipped: project_id would be null and the database requires a value. ' +
+          'This is the NON-BILLABLE BUCKET, not an abandoned row.',
+      },
+    ];
+  },
 };
 
 export { TAXONOMY };

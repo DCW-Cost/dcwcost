@@ -1,0 +1,286 @@
+---
+/**
+ * What the sync loaded, so a person can look at it.
+ *
+ * WHY THIS PAGE EXISTS, AND WHY IT IS THE FIRST ONE OFF FIXTURES.
+ *
+ * The mirror holds 18,801 rows and until now the only way to see any of them
+ * was to ask someone with database access to run a query. That answers "how
+ * many" and never "is it right" — and the second question is the one nobody
+ * can answer on another person's behalf. "Oregon Zoo Entry Plaza — Opsis
+ * Architecture — Community — Portland, OR" either looks correct to the
+ * person who knows the project, in about two seconds, or it does not.
+ *
+ * Counts cannot do that. Every check during the first load was a row count,
+ * and row counts reconciled perfectly while a contact sat linked to a client
+ * company named after the contact.
+ *
+ * It is read-only on purpose: no writes, no permissions to design, nothing
+ * that can damage the data it is showing. That makes it the safest possible
+ * first page to run against real data, which is the other half of its job.
+ *
+ * The anomaly list is the same argument. The sync records what it could not
+ * handle on every run — skipped records, values it had to drop — and that
+ * list has never been readable by anyone who could act on it.
+ */
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import { getProvider } from '../../../lib/intranet/data/index.ts';
+import type { ProjectSummary, SyncAnomaly } from '../../../lib/intranet/data/types.ts';
+
+export const prerender = false;
+
+const provider = getProvider(Astro.cookies, Astro.request);
+
+// Each half fails on its own. A broken anomaly query must not blank the
+// project list, and vice versa — a page that shows nothing cannot tell you
+// whether the data is wrong or the page is.
+let projects: ProjectSummary[] = [];
+let projectError = '';
+try {
+  projects = await provider.listProjectSummaries();
+} catch (err) {
+  projectError = err instanceof Error ? err.message : String(err);
+}
+
+let anomalies: SyncAnomaly[] = [];
+let anomalyError = '';
+try {
+  anomalies = await provider.listOpenAnomalies();
+} catch (err) {
+  anomalyError = err instanceof Error ? err.message : String(err);
+}
+
+const q = (Astro.url.searchParams.get('q') ?? '').trim().toLowerCase();
+const shown = q
+  ? projects.filter((p) =>
+      [p.name, ...p.clients, ...p.sector, ...p.city].join(' ').toLowerCase().includes(q),
+    )
+  : projects;
+
+const withoutClient = projects.filter((p) => p.clients.length === 0).length;
+const withoutTasks = projects.filter((p) => p.taskCount === 0).length;
+const multiClient = projects.filter((p) => p.clients.length > 1).length;
+---
+
+<IntranetLayout
+  title="Projects"
+  crumb="Projects"
+  section="projects"
+  meta={[
+    `${projects.length} projects`,
+    `${multiClient} with two or more clients`,
+    `${anomalies.length} open anomalies`,
+  ]}
+>
+  <section class="panel">
+    <h2>Projects</h2>
+    <p class="sub">
+      Everything the Airtable sync has mirrored. Read-only — this page never writes.
+      Fix anything wrong in Airtable; the next sync carries it across.
+    </p>
+
+    {
+      projectError ? (
+        <p class="err">
+          <b>The project list could not be loaded.</b>
+          <br />
+          <code>{projectError}</code>
+        </p>
+      ) : (
+        <>
+          <form method="GET" class="searchrow">
+            <input
+              type="search"
+              name="q"
+              value={q}
+              placeholder="Filter by project, client, sector or city"
+              aria-label="Filter projects"
+            />
+            <button type="submit">Filter</button>
+            {q ? <a href="/teamintranet/projects/">Clear</a> : null}
+          </form>
+
+          <p class="sub">
+            {shown.length === projects.length
+              ? `${projects.length} projects`
+              : `${shown.length} of ${projects.length} projects`}
+            {withoutClient ? ` · ${withoutClient} with no client` : ''}
+            {withoutTasks ? ` · ${withoutTasks} with no tasks` : ''}
+          </p>
+
+          {shown.length === 0 ? (
+            <p class="sub">
+              {projects.length === 0
+                ? 'No projects. If the sync has run, this means the query returned nothing rather than that the mirror is empty.'
+                : 'Nothing matches that filter.'}
+            </p>
+          ) : (
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Client</th>
+                  <th>Sector</th>
+                  <th>Location</th>
+                  <th class="num">Tasks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((p) => (
+                  <tr>
+                    <td>{p.name}</td>
+                    {/* An empty cell is ambiguous: missing data or a rendering
+                        fault? Say which, so a blank is a finding. */}
+                    <td>{p.clients.length ? p.clients.join(', ') : <i class="none">none</i>}</td>
+                    <td>{p.sector.length ? p.sector.join(', ') : <i class="none">none</i>}</td>
+                    <td>{p.city.length ? p.city.join(', ') : <i class="none">none</i>}</td>
+                    <td class="num">{p.taskCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )
+    }
+  </section>
+
+  <section class="panel">
+    <h2>Open sync anomalies</h2>
+    <p class="sub">
+      What the last syncs could not handle. Records the sync skipped, and values it
+      had to drop. Deduplicated — the same record is recorded again on every run that
+      reads its table, so this lists each one once, most recent first.
+    </p>
+
+    {
+      anomalyError ? (
+        <p class="err">
+          <b>The anomaly list could not be loaded.</b>
+          <br />
+          <code>{anomalyError}</code>
+        </p>
+      ) : anomalies.length === 0 ? (
+        <p class="sub">Nothing unresolved.</p>
+      ) : (
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>Table</th>
+              <th>Airtable record</th>
+              <th>Field</th>
+              <th>What happened</th>
+            </tr>
+          </thead>
+          <tbody>
+            {anomalies.map((a) => (
+              <tr>
+                <td>{a.tableName}</td>
+                <td><code>{a.airtableRecordId ?? '—'}</code></td>
+                <td>{a.fieldName ?? '—'}</td>
+                <td class="detail">{a.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )
+    }
+  </section>
+</IntranetLayout>
+
+<style>
+  .panel {
+    background: var(--card, #fff);
+    border: 1px solid var(--line, #e3e3e3);
+    border-radius: 10px;
+    padding: 1.25rem 1.4rem 1.6rem;
+    margin-bottom: 1.5rem;
+  }
+  h2 {
+    margin: 0 0 0.3rem;
+    font-size: 1.05rem;
+  }
+  .sub {
+    color: var(--muted, #666);
+    font-size: 0.84rem;
+    margin: 0.25rem 0 0.9rem;
+  }
+  .err {
+    background: #fff4f4;
+    border: 1px solid #e8b4b4;
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    font-size: 0.86rem;
+  }
+  .err code {
+    overflow-wrap: anywhere;
+    font-size: 0.78rem;
+  }
+  .searchrow {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .searchrow input {
+    flex: 1 1 22rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--line, #d8d8d8);
+    border-radius: 6px;
+    font: inherit;
+  }
+  .searchrow button {
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--line, #d8d8d8);
+    border-radius: 6px;
+    background: #f5f5f5;
+    font: inherit;
+    cursor: pointer;
+  }
+  .searchrow a {
+    font-size: 0.82rem;
+    color: var(--muted, #666);
+  }
+  .grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .grid th,
+  .grid td {
+    text-align: left;
+    padding: 0.42rem 0.6rem;
+    border-bottom: 1px solid var(--line, #eee);
+    vertical-align: top;
+  }
+  .grid th {
+    font-weight: 600;
+    color: var(--muted, #555);
+    border-bottom-width: 2px;
+    position: sticky;
+    top: 0;
+    background: var(--card, #fff);
+  }
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .none {
+    color: #b00;
+    font-style: normal;
+    font-size: 0.78rem;
+  }
+  .detail {
+    max-width: 48rem;
+    overflow-wrap: anywhere;
+  }
+  @media (max-width: 760px) {
+    .grid {
+      font-size: 0.8rem;
+    }
+    .detail {
+      max-width: none;
+    }
+  }
+</style>

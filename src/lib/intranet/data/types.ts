@@ -190,6 +190,45 @@ export interface Estimate {
 }
 
 /**
+ * One mirrored project, as a person would check it.
+ *
+ * Deliberately not the whole row. The question this answers is "does this
+ * look right" — the client, what kind of work, where, and whether tasks
+ * attached — which is the one check nobody can run on someone else's behalf.
+ * A count of rows cannot answer it and neither can a query result pasted
+ * into a conversation.
+ *
+ * `clients` is a list because 30 projects name two companies, which is why
+ * migration 012 made it a join table rather than a column.
+ */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  clients: string[];
+  sector: string[];
+  city: string[];
+  taskCount: number;
+}
+
+/**
+ * Something the sync could not handle, still unresolved.
+ *
+ * These are written on every run and have never been readable by anyone but
+ * a person with database access. The list includes the records the sync
+ * skipped and the values it had to drop, which is precisely the list someone
+ * has to work through in Airtable — and could not see.
+ */
+export interface SyncAnomaly {
+  id: number;
+  seenAt: string;
+  tableName: string;
+  airtableRecordId: string | null;
+  kind: string;
+  fieldName: string | null;
+  detail: string;
+}
+
+/**
  * Everything a page needs. Implemented by fixtures now and by Supabase later;
  * pages depend on this shape and nothing else.
  */
@@ -203,4 +242,8 @@ export interface DataProvider {
   getActiveProfiles(): Promise<Profile[]>;
   getEstimate(id: string): Promise<Estimate | null>;
   listEstimates(): Promise<Array<Pick<Estimate, 'id' | 'name' | 'status' | 'updatedAt' | 'createdByName'>>>;
+  /** Mirrored projects, for eyeballing what the sync loaded. Read-only. */
+  listProjectSummaries(): Promise<ProjectSummary[]>;
+  /** Unresolved sync anomalies, newest first. Read-only. */
+  listOpenAnomalies(): Promise<SyncAnomaly[]>;
 }

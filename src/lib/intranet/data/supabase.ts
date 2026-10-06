@@ -47,7 +47,9 @@ import type {
   LineDisposition,
   Observation,
   Profile,
+  ProjectSummary,
   ReaderQuestion,
+  SyncAnomaly,
   TaxonomyNode,
 } from './types.ts';
 
@@ -508,6 +510,88 @@ export function createSupabaseProvider(
           createdByName: str(createdBy.full_name),
         };
       });
+    },
+
+    async listProjectSummaries(): Promise<ProjectSummary[]> {
+      // allRows, not rows: there are 1,873 projects and PostgREST caps an
+      // unbounded select at 1,000 without saying so. A page showing the
+      // first thousand of them, with no indication, is exactly the quiet
+      // wrongness this page exists to expose.
+      const found = await allRows('listProjectSummaries', (from, to) =>
+        db
+          .from('projects')
+          .select(
+            `id, name, sector, city,
+             project_client_companies(client_companies(company_name))`,
+          )
+          .order('name')
+          .range(from, to),
+      );
+
+      // Task counts come separately rather than as an embedded aggregate.
+      // Nested embedding is already proven in this file; an embedded count
+      // is not, and a feature that silently returns nothing would show every
+      // project with zero tasks — wrong in the direction nobody questions.
+      const taskRows = await allRows('listProjectSummaries.tasks', (from, to) =>
+        db.from('deliverables').select('project_id').range(from, to),
+      );
+      const taskCounts = new Map<string, number>();
+      for (const r of taskRows) {
+        const id = str(r.project_id);
+        if (id) taskCounts.set(id, (taskCounts.get(id) ?? 0) + 1);
+      }
+
+      return found.map((r) => {
+        const links = Array.isArray(r.project_client_companies) ? r.project_client_companies : [];
+        const clients: string[] = [];
+        for (const link of links as Row[]) {
+          const company = (link?.client_companies ?? {}) as Row;
+          const nameOfCompany = str(company.company_name);
+          if (nameOfCompany && !clients.includes(nameOfCompany)) clients.push(nameOfCompany);
+        }
+        return {
+          id: str(r.id),
+          name: str(r.name),
+          clients,
+          sector: Array.isArray(r.sector) ? r.sector.map(str).filter(Boolean) : [],
+          city: Array.isArray(r.city) ? r.city.map(str).filter(Boolean) : [],
+          taskCount: taskCounts.get(str(r.id)) ?? 0,
+        };
+      });
+    },
+
+    async listOpenAnomalies(): Promise<SyncAnomaly[]> {
+      const found = await allRows('listOpenAnomalies', (from, to) =>
+        db
+          .from('sync_anomalies')
+          .select('id, seen_at, table_name, airtable_record_id, kind, field_name, detail')
+          .is('resolved_at', null)
+          .order('seen_at', { ascending: false })
+          .range(from, to),
+      );
+
+      // DEDUPLICATED, because anomalies are recorded per run and the same
+      // record reappears on every run that reads its table — the non-billable
+      // bucket is already in there four times. A list that repeats itself is
+      // a list nobody finishes reading, and the thing to act on is the
+      // record, not the occurrence. Newest kept, since `found` is sorted.
+      const seen = new Set<string>();
+      const out: SyncAnomaly[] = [];
+      for (const r of found) {
+        const key = [str(r.table_name), str(r.airtable_record_id), str(r.kind), str(r.field_name)].join(' ');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          id: Number(r.id) || 0,
+          seenAt: str(r.seen_at),
+          tableName: str(r.table_name),
+          airtableRecordId: strOrNull(r.airtable_record_id),
+          kind: str(r.kind),
+          fieldName: strOrNull(r.field_name),
+          detail: str(r.detail),
+        });
+      }
+      return out;
     },
   };
 }
