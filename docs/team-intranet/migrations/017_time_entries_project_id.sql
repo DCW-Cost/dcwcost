@@ -1,0 +1,115 @@
+-- ============================================================================
+-- 017 — drop time_entries.project_id, which has no source
+--
+-- Found by checking all seven unverified foreign keys on the unmapped
+-- tables as a SET, before writing any field map, rather than discovering
+-- them one at a time during mapping. That ordering is why this is one
+-- migration instead of one per discovery.
+--
+-- ============================================================================
+-- WHAT THE SOURCE ACTUALLY SAYS
+--
+-- Time Tracking has exactly three link fields:
+--
+--   "Collaborators"          -->  Collaborators        -->  person_id
+--   "DCW Projects"           -->  DCW PROJECT TASKS    -->  deliverable_id
+--   "DCW Project Pursuits"   -->  DCW Project Pursuits -->  pursuit_id
+--
+-- There is no link to New Project Entry. The field NAMED for projects
+-- points at tasks, so project_id has nothing to fill it.
+--
+-- THE TEMPTING WRONG ANSWER was to fill it from the task's project. That
+-- is a derived link the source never asserts, and it is the third time
+-- that shape has come up: the synthetic "Non-project Work" project, and
+-- subconsultant_invoices.deliverable_id in 016. A column existing is not
+-- a reason to invent data for it.
+--
+-- Nothing is lost. The project remains reachable through
+-- deliverable_id -> deliverables.project_id, which is the same path the
+-- source itself takes.
+--
+-- Dropped rather than left unmapped, for the reason 016 gives: a column
+-- with no writer is one somebody later fills from somewhere, and absence
+-- is a fact that lives in the schema where it cannot drift.
+--
+-- Free to drop: time_entries holds 0 rows and no code references it.
+--
+-- ============================================================================
+-- THE PATTERN THIS IS THE THIRD INSTANCE OF
+--
+--   Subconsultant Tasks."Project"       -->  DCW Project Tasks
+--   Subconsultant Invoices."Task"       -->  Subconsultant Tasks
+--   Time Tracking."DCW Projects"        -->  DCW Project Tasks
+--
+-- In this base, a link named for a project on a child table usually means
+-- TASK. That is a convention rather than three accidents, which makes the
+-- name actively misleading rather than merely unreliable.
+--
+-- Why it is that way is NOT KNOWABLE from the API: Airtable exposes no
+-- rename or repoint history. What is observable is that renaming link
+-- fields is routine here — the inverse of this one is called "Time
+-- Tracking Link" rather than the default "Time Tracking", and Project
+-- Notes' inverse is "Billing Notes". Both sides carry names somebody
+-- chose. Whether these links were once correct and were repointed, or
+-- were always named loosely, cannot be told from here.
+-- ============================================================================
+
+alter table time_entries drop column if exists project_id;
+
+-- ============================================================================
+-- VERIFICATION
+--
+-- Uncomment and run as a second query. Every row should read exactly this:
+--
+--   project_id gone                   true
+--   deliverable_id still there        uuid
+--   it references deliverables        true
+--   SYNC CAN STILL UPDATE deliverable true
+--   pursuit_id still there            uuid
+--   person_id still there             uuid
+--   sync update columns remaining     18
+--   rows preserved                    0
+--
+-- The grant rows are not padding, and the reason is that THE ANSWER HAS
+-- DIFFERED EVERY TIME IT HAS BEEN ASKED. 014's table had table-level
+-- UPDATE and needed no grant; 016's had column-level UPDATE and the new
+-- column was unwritable without one. This table is column-level again, on
+-- 19 columns. Dropping one should leave the other 18 untouched — "should"
+-- being exactly the word that makes it worth checking.
+--
+-- Run against production before committing, per the standing practice.
+-- ============================================================================
+--
+-- select 'project_id gone' as item,
+--        (not exists (select 1 from information_schema.columns
+--                      where table_schema='public' and table_name='time_entries'
+--                        and column_name='project_id'))::text as value
+-- union all select 'deliverable_id still there',
+--        coalesce((select data_type from information_schema.columns
+--                   where table_schema='public' and table_name='time_entries'
+--                     and column_name='deliverable_id'), 'MISSING')
+-- union all select 'it references deliverables',
+--        exists (select 1 from pg_constraint c
+--                  join unnest(c.conkey) k(attnum) on true
+--                  join pg_attribute a on a.attrelid=c.conrelid and a.attnum=k.attnum
+--                 where c.contype='f' and c.conrelid='time_entries'::regclass
+--                   and a.attname='deliverable_id'
+--                   and c.confrelid='deliverables'::regclass)::text
+-- union all select 'SYNC CAN STILL UPDATE deliverable',
+--        has_column_privilege('airtable_sync','time_entries','deliverable_id','UPDATE')::text
+-- union all select 'pursuit_id still there',
+--        coalesce((select data_type from information_schema.columns
+--                   where table_schema='public' and table_name='time_entries'
+--                     and column_name='pursuit_id'), 'MISSING')
+-- union all select 'person_id still there',
+--        coalesce((select data_type from information_schema.columns
+--                   where table_schema='public' and table_name='time_entries'
+--                     and column_name='person_id'), 'MISSING')
+-- union all select 'sync update columns remaining',
+--        (select count(*)::text from information_schema.column_privileges
+--          where table_schema='public' and table_name='time_entries'
+--            and grantee='airtable_sync' and privilege_type='UPDATE')
+-- union all select 'rows preserved',
+--        (select count(*)::text from time_entries);
+--
+-- ============================================================================

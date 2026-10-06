@@ -440,6 +440,32 @@ export const TABLES: readonly TableSpec[] = [
   },
 
   // ===========================================================================
+  // STANDING RULE FOR THIS BASE: A LINK NAMED FOR A PROJECT USUALLY MEANS
+  // TASK. Check what every link POINTS AT before mapping it. Three
+  // instances, which makes it a convention rather than three accidents:
+  //
+  //   Subconsultant Tasks."Project"     -->  DCW Project Tasks
+  //   Subconsultant Invoices."Task"     -->  Subconsultant Tasks
+  //   Time Tracking."DCW Projects"      -->  DCW Project Tasks
+  //
+  // Two of those cost a migration. The name is actively misleading here,
+  // not merely unreliable, and anyone reading "DCW Projects" on a child
+  // table will assume projects — both of us did, until it was checked.
+  //
+  // THE ONE EXCEPTION, recorded so nobody has to look it up again:
+  // Project Notes."DCW Projects" GENUINELY POINTS AT New Project Entry.
+  // That table has two separate links, to a project and to a task, and
+  // both are real. Checked 6 October 2026 against the live base.
+  //
+  // Why the convention exists is not knowable from the API — Airtable
+  // exposes no rename or repoint history. What is observable is that
+  // renaming link fields is routine here: the inverse of Time Tracking's
+  // link is "Time Tracking Link" rather than the default "Time Tracking",
+  // and Project Notes' inverse is "Billing Notes". Both sides carry names
+  // somebody chose, so the names cannot be trusted in either direction.
+  // ===========================================================================
+
+  // ===========================================================================
   // PHASE TWO — the rehearsal. Three tables, 33 rows, 69 Airtable fields.
   //
   // Every link below was verified by checking WHAT IT POINTS AT, not what it

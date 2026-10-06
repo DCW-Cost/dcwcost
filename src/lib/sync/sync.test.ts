@@ -1361,3 +1361,13 @@ test('bid_results takes its created date from record metadata', () => {
   assert.equal(spec('bid_results').createdAtColumn, 'date_added');
   assert.ok(!spec('bid_results').fields.some((f) => f.to === 'date_added'));
 });
+
+test('the standing rule about misleading link names is written down', () => {
+  // Three instances cost two migrations. The next person mapping a table
+  // in this base needs the rule before they need the explanation, so it
+  // lives in the field map rather than in a commit message.
+  const src = readSource(new URL('./tables.ts', import.meta.url));
+  assert.match(src, /A LINK NAMED FOR A PROJECT USUALLY MEANS/);
+  // And the exception, so nobody re-checks it or assumes it is wrong too.
+  assert.match(src, /Project Notes\."DCW Projects" GENUINELY POINTS AT New Project Entry/);
+});
