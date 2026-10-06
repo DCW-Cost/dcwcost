@@ -1440,3 +1440,16 @@ test('out_of_office loads after the table it links to', () => {
     'person_id cannot resolve unless people is loaded first'
   );
 });
+
+test('the cardinality rule is written down where the next maps get written', () => {
+  // out_of_office lost people on 6 of 843 rows and a 100-row sample found
+  // none of them. The schema knew first: prefersSingleRecordLink:false.
+  // This guard exists so the rule survives in the file the next four maps
+  // are written into, not only in a commit message.
+  const src = readSource(new URL('./tables.ts', import.meta.url));
+  assert.match(src, /TAKE LINK CARDINALITY FROM THE SCHEMA, NEVER FROM\s*\n\s*\/\/ A SAMPLE/);
+  assert.match(src, /prefersSingleRecordLink:false/);
+  // And the tables already known to need it, so nobody re-derives the list.
+  assert.match(src, /Activity Log\."Logged By"/);
+  assert.match(src, /Activity Log\."Action Owner"/);
+});

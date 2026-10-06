@@ -442,6 +442,34 @@ export const TABLES: readonly TableSpec[] = [
   },
 
   // ===========================================================================
+  // SECOND STANDING RULE: TAKE LINK CARDINALITY FROM THE SCHEMA, NEVER FROM
+  // A SAMPLE. Any link whose field config says prefersSingleRecordLink:false
+  // gets checked across the FULL population before it becomes a scalar
+  // column — not sampled.
+  //
+  // out_of_office is why. Six of its 843 records are group events carrying
+  // two or three people, and a single person_id silently kept the first. A
+  // 100-row sample found none of them, and that was the EXPECTED result
+  // rather than bad luck: 6 in 843 means a 100-row sample misses them most
+  // of the time. No sample size anyone would actually reach for finds a
+  // rare-but-structural case reliably.
+  //
+  // The schema knew before any data did. "Collaborators" was declared
+  // prefersSingleRecordLink:false, which says Airtable PERMITS several —
+  // and permitted-but-unused is exactly the state that turns into used
+  // without anybody noticing. So the defence is not a bigger sample, it is
+  // reading the config and then counting the whole table.
+  //
+  // KNOWN TO NEED THIS when their maps are written:
+  //   Activity Log."Logged By"      --> Collaborators   (two separate person
+  //   Activity Log."Action Owner"   --> Collaborators    links on one table)
+  //   Time Tracking."DCW Project Pursuits" --> DCW Project Pursuits
+  //
+  // Checking is one query against the live table, and it is cheap at any
+  // size. The remaining tables hold 3,479, 3,569, 3,475 and 29,119 records,
+  // so anything learned from 100 of them is a claim about 100.
+  //
+  // ===========================================================================
   // STANDING RULE FOR THIS BASE: A LINK NAMED FOR A PROJECT USUALLY MEANS
   // TASK. Check what every link POINTS AT before mapping it. Three
   // instances, which makes it a convention rather than three accidents:
