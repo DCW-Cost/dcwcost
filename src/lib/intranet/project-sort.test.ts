@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readSource } from '../sync/read-source.ts';
 import { parseSort, sortHref, sortProjects, SORT_KEYS } from './project-sort.ts';
 import type { ProjectSummary } from './data/types.ts';
 
@@ -82,10 +82,7 @@ test('the page reads the URL and delegates the ordering', () => {
   // Logic in an .astro file cannot be reached by a test, which is how a
   // shadowed variable took the sync down for an hour. The page must not
   // grow its own comparator.
-  const page = readFileSync(
-    new URL('../../pages/teamintranet/projects/index.astro', import.meta.url),
-    'utf8',
-  );
+  const page = readSource(new URL('../../pages/teamintranet/projects/index.astro', import.meta.url));
   assert.match(page, /sortProjects\(filtered, sort, dir\)/);
   assert.ok(!page.includes('new Intl.Collator'), 'the comparator belongs in the module');
   assert.ok(!/\.sort\(\(a, b\)/.test(page), 'the page must not sort inline');
