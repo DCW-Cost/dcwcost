@@ -341,6 +341,21 @@ async function syncTable(
 
   const JOIN_BATCH_ROWS = Math.min(BATCH, Math.floor(65535 / 2));
 
+  // Loaded before the first page and emptied as links are seen, so what
+  // remains at the end is what Airtable no longer has. Bounded by the join
+  // table's size — 3,501 pairs of short strings for the largest here.
+  //
+  // SKIPPED ENTIRELY UNDER sampleSize, because reading 100 of 5,558 records
+  // leaves almost every link unseen and would report thousands of false
+  // disappearances. A misleading number here is worse than none: it is the
+  // number a design decision has been waiting on.
+  const staleLinks = new Map<string, Set<string>>();
+  if (!opts.sampleSize) {
+    for (const join of joins) {
+      staleLinks.set(join.table, await existingLinkPairs(db, t, join));
+    }
+  }
+
   // Totalled across pages, because the per-page line alone cannot answer
   // the question the measurement exists for: whether memory tracks RECORDS
   // or BYTES. Per-page averages on deliverables range 41-66 KB, so a table
@@ -607,6 +622,12 @@ async function syncTable(
           if (!parentUuid) continue;
 
           for (const childId of planned.childRecordIds) {
+            // Marked seen by AIRTABLE ids, before resolution, so a link
+            // whose child is missing from the mirror still counts as
+            // present in Airtable — it is unresolved, not disappeared,
+            // and those are different findings.
+            staleLinks.get(join.table)?.delete(`${planned.parentRecordId}|${childId}`);
+
             const childUuid = childKeys?.get(childId);
             if (!childUuid) {
               jr.unresolvedParents++;
@@ -716,6 +737,21 @@ async function syncTable(
         ? `${join.table}: ${DRY} would write ${jr.inserted} links, ${jr.unresolvedParents} unresolved`
         : `${join.table}: ${jr.inserted} new links, ${jr.updated} re-stamped, ${jr.blocked} blocked`
     );
+
+    // THE PARKED QUESTION, AS A NUMBER. A link removed in Airtable has
+    // nowhere to be recorded: these tables have no is_active and the sync
+    // never deletes. Whether that matters depends on how often it happens,
+    // which nobody has known — so this counts rather than argues.
+    const left = staleLinks.get(join.table);
+    if (!opts.sampleSize && left) {
+      const examples = [...left].slice(0, 5).join(', ');
+      log(
+        `${join.table}: ${left.size} mirror link(s) not present in Airtable` +
+          (left.size ? ` — e.g. ${examples}` : '')
+      );
+    } else if (opts.sampleSize) {
+      log(`${join.table}: stale-link count skipped, sampleSize would make it meaningless`);
+    }
   }
 
   // On a joinsOnly run the parent was not written, so reporting a row of
@@ -819,6 +855,35 @@ export async function findOffendingRows(
     await db.query('rollback').catch(() => {});
   }
   return failures;
+}
+
+/**
+ * Links the mirror holds, keyed the way Airtable names them.
+ *
+ * WHY AIRTABLE IDS AND NOT UUIDS. The obvious comparison is uuid pairs,
+ * and it does not work on a dry run: nothing is written, so the parent
+ * uuids are sentinels and match nothing in the mirror. Joining out to the
+ * two parent tables costs one query and makes the count mean the same
+ * thing whether or not the run writes.
+ *
+ * This exists to answer a question that was parked twice for want of a
+ * number: how often does a link disappear from Airtable? Every option for
+ * handling it is unattractive in a different way, and which unattractive
+ * thing is worth doing depends entirely on whether the answer is 2 or 200.
+ */
+async function existingLinkPairs(
+  db: Db,
+  parent: TableSpec,
+  join: JoinSpec
+): Promise<Set<string>> {
+  const res = await db.query(
+    `select p.airtable_record_id as parent_key, c.airtable_record_id as child_key
+       from ${join.table} j
+       join ${parent.key} p on p.id = j.${join.parentColumn}
+       join ${join.linkTo} c on c.id = j.${join.childColumn}
+      where p.airtable_record_id is not null and c.airtable_record_id is not null`
+  );
+  return new Set(res.rows.map((r) => `${r.parent_key}|${r.child_key}`));
 }
 
 /**

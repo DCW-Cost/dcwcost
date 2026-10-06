@@ -1233,3 +1233,37 @@ test('blocked rows are named, not counted', () => {
   assert.match(src, /if \(wrote\.has\(p\.airtableRecordId\)\) continue;/);
   assert.match(src, /upsert returned no row/);
 });
+
+// ------------------------------- counting links Airtable no longer has
+
+test('stale links are counted by Airtable id, so a dry run can report them', () => {
+  // The obvious comparison is uuid pairs and it silently fails on a dry
+  // run: nothing is written, parent uuids are sentinels, and every link
+  // looks absent. Joining out to the two parent tables costs one query and
+  // makes the count mean the same thing whether the run writes or not.
+  const src = readSource(new URL('./run.ts', import.meta.url));
+  const fn = src.slice(src.indexOf('async function existingLinkPairs'));
+  assert.match(fn.slice(0, 900), /p\.airtable_record_id as parent_key/);
+  assert.match(fn.slice(0, 900), /c\.airtable_record_id as child_key/);
+  assert.match(src, /staleLinks\.get\(join\.table\)\?\.delete\(`\$\{planned\.parentRecordId\}\|\$\{childId\}`\)/);
+});
+
+test('a sampled run refuses to report a stale-link count', () => {
+  // Reading 100 of 5,558 records leaves almost every link unseen, so the
+  // count would be thousands of false disappearances. This is the number a
+  // parked design decision is waiting on, and a misleading one is worse
+  // than none.
+  const src = readSource(new URL('./run.ts', import.meta.url));
+  assert.match(src, /if \(!opts\.sampleSize\) \{\s*\n\s*for \(const join of joins\) \{/);
+  assert.match(src, /stale-link count skipped, sampleSize would make it meaningless/);
+});
+
+test('an unresolved link is not counted as a disappeared one', () => {
+  // They are different findings. A child missing from the mirror is a
+  // resolution problem; a link missing from Airtable is a removal. Marking
+  // seen BEFORE resolution keeps them apart.
+  const src = readSource(new URL('./run.ts', import.meta.url));
+  const mark = src.indexOf('staleLinks.get(join.table)?.delete(');
+  const resolve = src.indexOf('const childUuid = childKeys?.get(childId);');
+  assert.ok(mark > 0 && resolve > mark, 'the link must be marked seen before resolution is attempted');
+});
