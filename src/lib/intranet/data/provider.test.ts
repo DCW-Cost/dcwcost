@@ -7,14 +7,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readSource } from '../../sync/read-source.ts';
 import { fixtureProvider } from './fixtures.ts';
 
 test('fixtures implement every method the interface declares', async () => {
   // A method added to DataProvider and implemented only in supabase.ts type
   // checks fine and throws at runtime in demo mode, which is where everyone
   // develops.
-  const declared = readFileSync(new URL('./types.ts', import.meta.url), 'utf8');
+  const declared = readSource(new URL('./types.ts', import.meta.url));
   const iface = declared.slice(declared.indexOf('export interface DataProvider'));
   const methods = [...iface.slice(0, iface.indexOf('\n}')).matchAll(/^\s{2}(\w+)\(/gm)].map((m) => m[1]);
   assert.ok(methods.length >= 8, `expected to find the methods, found ${methods.length}`);
@@ -26,10 +26,10 @@ test('fixtures implement every method the interface declares', async () => {
 test('both providers are checked against the same method list', () => {
   // supabase.ts is not importable here — it reads import.meta.env at load —
   // so its coverage is checked by source rather than by call.
-  const declared = readFileSync(new URL('./types.ts', import.meta.url), 'utf8');
+  const declared = readSource(new URL('./types.ts', import.meta.url));
   const iface = declared.slice(declared.indexOf('export interface DataProvider'));
   const methods = [...iface.slice(0, iface.indexOf('\n}')).matchAll(/^\s{2}(\w+)\(/gm)].map((m) => m[1]);
-  const supa = readFileSync(new URL('./supabase.ts', import.meta.url), 'utf8');
+  const supa = readSource(new URL('./supabase.ts', import.meta.url));
   for (const m of methods) {
     assert.ok(supa.includes(`async ${m}(`), `supabase.ts must implement ${m}`);
   }
@@ -41,7 +41,7 @@ test('the layout never uses the throwing module-level provider', () => {
   // getOpenQuestions() unconditionally — so the first real-data deploy would
   // have broken every page in the intranet from the shell they all share,
   // including pages that had been migrated correctly.
-  const layout = readFileSync(new URL('../../../layouts/IntranetLayout.astro', import.meta.url), 'utf8');
+  const layout = readSource(new URL('../../../layouts/IntranetLayout.astro', import.meta.url));
   assert.ok(
     !/import \{[^}]*\bprovider\b[^}]*\} from/.test(layout.replace(/getProvider/g, '')),
     'the layout must import getProvider, not provider',
@@ -51,10 +51,7 @@ test('the layout never uses the throwing module-level provider', () => {
 
 test('the projects page is read-only', () => {
   // The safety claim this page is built on. Nothing here may write.
-  const page = readFileSync(
-    new URL('../../../pages/teamintranet/projects/index.astro', import.meta.url),
-    'utf8',
-  );
+  const page = readSource(new URL('../../../pages/teamintranet/projects/index.astro', import.meta.url));
   for (const forbidden of ['.insert(', '.update(', '.delete(', '.upsert(', 'method="POST"']) {
     assert.ok(!page.includes(forbidden), `the projects page must not contain ${forbidden}`);
   }

@@ -19,7 +19,7 @@ import { KNOWN_SKIPS, LOAD_ORDER, spec, TABLES } from './tables.ts';
 import { renderPlan, selectedTables } from './run.ts';
 import { parseSyncRequest } from './request.ts';
 import { handleSync } from '../../../netlify/functions/airtable-sync-background.mts';
-import { readFileSync } from 'node:fs';
+import { readSource } from './read-source.ts';
 
 // ---------------------------------------------------------------- coercion
 
@@ -628,7 +628,7 @@ test('every counter on TableResult has a column to land in', () => {
   // it. It read 0 on every dry run, which proves nothing: a dry run writes
   // nothing, so nothing can be blocked. This asserts the insert names every
   // counter, so the next one added cannot go missing the same way.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const insert = src.slice(src.indexOf('insert into sync_run_tables'));
   const columns = insert.slice(0, insert.indexOf(')')).match(/\w+/g) ?? [];
   for (const counter of [
@@ -714,10 +714,7 @@ test('nothing the handler passes to runSync is named `tables`', () => {
   // request died in the temporal dead zone before opening a run, while the
   // background function answered 202. Nothing could catch it, because the
   // handler reads Netlify.env and no test can invoke it.
-  const src = readFileSync(
-    new URL('../../../netlify/functions/airtable-sync-background.mts', import.meta.url),
-    'utf8'
-  );
+  const src = readSource(new URL('../../../netlify/functions/airtable-sync-background.mts', import.meta.url));
   assert.ok(!/const\s+tables\s*=/.test(src), 'no local named `tables` in the handler');
   assert.ok(
     /const\s*\{\s*runId,\s*tables:\s*\w+\s*\}/.test(src),
@@ -812,7 +809,7 @@ test('machine endpoints are exempt from the session guard on purpose', () => {
   // through whether or not anyone intended it. This asserts the intent is
   // written down and checked first, so widening the guard later cannot
   // silently break the trigger.
-  const mw = readFileSync(new URL('../../middleware.ts', import.meta.url), 'utf8');
+  const mw = readSource(new URL('../../middleware.ts', import.meta.url));
   assert.match(mw, /MACHINE_PATHS = \[[^\]]*'\/api\/sync\/trigger'/);
   const machineAt = mw.indexOf('if (isMachine(path)) return next();');
   const intranetAt = mw.indexOf('if (!isIntranet(path)) return next();');
@@ -827,7 +824,7 @@ test('the trigger awaits the hand-off rather than firing and forgetting', () => 
   // The reasoning that produced it was the error worth guarding: awaiting
   // the POST was confused with awaiting the fifteen minutes of work. Netlify
   // answers the POST in milliseconds and runs the function afterwards.
-  const src = readFileSync(new URL('../../pages/api/sync/trigger.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('../../pages/api/sync/trigger.ts', import.meta.url));
   // Comments stripped first: this file explains the bug by name, and a
   // check that cannot tell prose from code would fail on the explanation.
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -840,7 +837,7 @@ test('the trigger awaits the hand-off rather than firing and forgetting', () => 
 // ------------------------ skipping what the database would refuse
 
 test('every counter including skipped has a column to land in', () => {
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const insert = src.slice(src.indexOf('insert into sync_run_tables'));
   const columns = insert.slice(0, insert.indexOf(')')).match(/\w+/g) ?? [];
   for (const counter of [
@@ -855,7 +852,7 @@ test('required columns are read from the database, not declared', () => {
   // A list in the field map would drift: a migration adding a NOT NULL
   // column would not be reflected until someone remembered. That is the
   // failure shape this project has hit six times in other forms.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   assert.match(src, /information_schema\.columns/);
   assert.match(src, /is_nullable = 'NO' and column_default is null/);
   // Columns WITH a default must be excluded, or records would be skipped
@@ -867,7 +864,7 @@ test('the skip check runs after link resolution, not before', () => {
   // deliverables.project_id is NOT NULL and is filled by resolution. Checked
   // before that, every deliverable would look unwritable; checked after, only
   // the ones whose project genuinely did not resolve do.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   // requiredColumns is now fetched once before the first page, so its
   // position no longer says anything. What matters is the order INSIDE the
   // page handler: resolve links, then decide what the database would refuse.
@@ -897,7 +894,7 @@ test('a required column nothing maps fails the run before the first batch', () =
   // If the database requires a column the field map never writes, every
   // insert fails. Saying so once, up front, beats discovering it 200 rows
   // into a transaction.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   assert.match(src, /the field map never writes/);
   assert.match(src, /throw new Error\(/);
 });
@@ -920,7 +917,7 @@ test('joinsOnly loads parent keys instead of writing parents', () => {
   // A join row needs its parent's uuid. On a normal run the parent upsert
   // supplies it; with the parent skipped it has to come from the mirror, or
   // every join row would be unresolved.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const branch = src.slice(src.indexOf('if (opts.joinsOnly) {'));
   assert.match(branch.slice(0, 400), /loadKeyMap\(db, key\)/);
   // And it must not report a parent result, or the run reads as though the
@@ -937,7 +934,7 @@ test('the time budget is checked inside the page loop', () => {
   // Now that a table is written page by page, per page is the right place —
   // it is checked more often than per join was, and it covers the parent
   // writes as well as the join writes.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const handler = src.slice(src.indexOf('}, async (page) => {'));
   assert.match(handler.slice(0, 900), /RUN_BUDGET_MS/, 'the page handler must check the budget');
   assert.match(handler.slice(0, 1200), /Re-run the same scope/, 'and say how to recover');
@@ -956,7 +953,7 @@ test('measuring is off unless asked, because it costs memory to do', () => {
   // It keeps the response body as a string alongside the parsed objects.
   // Adding that to every run is the one thing a memory investigation must
   // not do, so the default path must still go straight to res.json().
-  const src = readFileSync(new URL('./airtable.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./airtable.ts', import.meta.url));
   assert.match(src, /if \(!opts\.measure\) return \(await res\.json\(\)\) as Page;/);
   assert.equal(parseSyncRequest({}).measure, false);
 });
@@ -972,7 +969,7 @@ test('a dry run loads out-of-scope parent keys, like a real run does', () => {
   // run, because it is the thing being trusted before writing.
   // Comments stripped first: the explanation below the loop quotes a JSON
   // body containing braces, and slicing to the first `}` lands inside it.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8')
+  const src = readSource(new URL('./run.ts', import.meta.url))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
   const loop = src.slice(src.indexOf('for (const key of skipped) {'));
@@ -987,7 +984,7 @@ test('nothing in syncTable holds the whole table', () => {
   // The ceiling was never a design decision — it was `readTable` building an
   // array because the upsert did not return the uuid it had written. 5,557
   // deliverables is 334 MB of raw JSON, and a run measured 821 MB of 1,024.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const fn = src.slice(src.indexOf('async function syncTable('), src.indexOf('async function deriveGrossSf'));
   assert.ok(!/\breadTable\(/.test(fn), 'syncTable must stream, not accumulate');
   assert.match(fn, /await streamTable\(/);
@@ -999,7 +996,7 @@ test('nothing in syncTable holds the whole table', () => {
 test('join rows are written beside their parents, from the returned uuid', () => {
   // The structural change. Joins used to need a second pass over every
   // record because a parent's uuid was only knowable after the fact.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   assert.match(src, /parentKeys\.set\(p\.airtableRecordId, String\(row\.id\)\)/);
   assert.ok(!src.includes('async function syncJoin'), 'the second pass is gone');
 });
@@ -1007,7 +1004,7 @@ test('join rows are written beside their parents, from the returned uuid', () =>
 test('the key map is published before the first page, and grows', () => {
   // Later tables resolve against it while this one is still streaming, so it
   // must be the same Map object throughout rather than replaced at the end.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const fn = src.slice(src.indexOf('async function syncTable('), src.indexOf('async function deriveGrossSf'));
   const publish = fn.indexOf('keys.set(key, parentKeys)');
   const stream = fn.indexOf('await streamTable(');
@@ -1017,14 +1014,14 @@ test('the key map is published before the first page, and grows', () => {
 
 test('anomalies are written per page, not once at the end', () => {
   // A run killed mid-table used to record none at all for that table.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const handler = src.slice(src.indexOf('}, async (page) => {'), src.indexOf('log(`${key}: read ${total}'));
   assert.match(handler, /await recordAnomalies\(db, runId, key, issues\)/);
 });
 
 test('streamTable hands over pages and keeps none of them', async () => {
   const { streamTable } = await import('./airtable.ts');
-  const src = readFileSync(new URL('./airtable.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./airtable.ts', import.meta.url));
   const fn = src.slice(src.indexOf('export async function streamTable'));
   assert.ok(typeof streamTable === 'function');
   // It returns a count, not an array. Returning the records would make the
@@ -1037,7 +1034,7 @@ test('maxRecords trims before the handler sees the page', () => {
   // sampleSize is how the memory baseline was measured. Handing over 100
   // records and trimming afterwards would mean the handler had already
   // planned and written rows the caller never asked for.
-  const src = readFileSync(new URL('./airtable.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./airtable.ts', import.meta.url));
   const fn = src.slice(src.indexOf('export async function streamTable'));
   const trim = fn.indexOf('records = records.slice(0, opts.maxRecords - total)');
   const hand = fn.indexOf('await onRecords(');
@@ -1049,7 +1046,7 @@ test('a join table records its own anomalies, under its own name', () => {
   // looking at project_client_contacts would ever find. The pre-streaming
   // code got this right via a separate function; the rewrite nearly lost it
   // by folding join issues into the parent's list.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   assert.match(src, /const joinIssues: \{ recordId: string; issue: Issue \}\[\] = \[\];/);
   assert.match(src, /await recordAnomalies\(db, runId, join\.table, joinIssues\)/);
   assert.match(src, /jr\.anomalies \+= joinIssues\.length/);
@@ -1060,7 +1057,7 @@ test('a measured run totals the bytes it read, not just the records', () => {
   // for. If memory tracks BYTES rather than RECORDS, time_entries — person,
   // date, hours, task — extrapolates completely differently from
   // deliverables' 60 columns, whose pages already range 41–66 KB a record.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   assert.match(src, /bytesRead \+= m\.bytes/);
   assert.match(src, /TOTAL \$\{total\} records, \$\{bytesRead\} bytes on the wire/);
   // Only when asked, like the per-page measurement it totals.
@@ -1084,7 +1081,7 @@ test('a measuring run writes nothing and syncs nothing', () => {
   // four-of-seventy-four field map for time_entries so a measurement could
   // run, which would have meant the next full sync loading that table with
   // most of its columns empty.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const branch = src.slice(src.indexOf('if (opts.measureOnly) {'));
   const body = branch.slice(0, branch.indexOf('const selected = selectedTables'));
   assert.ok(!/syncTable\(/.test(body), 'a measuring run must not sync a table');
@@ -1098,7 +1095,7 @@ test('a measuring run writes nothing and syncs nothing', () => {
 test('the measurement reports a distribution, not just an average', () => {
   // A mean alone is what made generalising from one page wrong: deliverables
   // average 54 KB with a 402 KB tail. Three more numbers cost nothing.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const fn = src.slice(src.indexOf('async function measureAirtableTable'));
   for (const part of ['min ${', 'median ~${', 'max ${', 'avg ${']) {
     assert.ok(fn.includes(part), `the summary must report ${part}`);
@@ -1109,8 +1106,42 @@ test('the measurement reports a distribution, not just an average', () => {
 test('the measuring handler keeps no pages', () => {
   // It can be pointed at a table of any size, which is only true because
   // the page is measured as it arrives and then dropped.
-  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const src = readSource(new URL('./run.ts', import.meta.url));
   const fn = src.slice(src.indexOf('async function measureAirtableTable'), src.indexOf('/**\n * The tables to sync'));
   assert.ok(!/push\(\.\.\.|\.push\(record/.test(fn), 'nothing may accumulate');
   assert.match(fn, /\(\) => \{\}/, 'the page handler discards');
+});
+
+test('a measuring run is labelled as one, wherever the row is opened', () => {
+  // The row is opened by the trigger and adopted by the function, so the
+  // function's own labelling never runs. Two measurements were recorded as
+  // `scope phase1, dry_run false, succeeded` — a full-scope real sync that
+  // wrote nothing — and that misled me within two minutes of shipping it.
+  const route = readSource(new URL('../../pages/api/sync/trigger.ts', import.meta.url));
+  const branch = route.slice(route.indexOf('if (opts.measureOnly) {'));
+  assert.match(branch.slice(0, 500), /values \(\$1, true, \$2\)/, 'must record dry_run = true');
+  assert.match(branch.slice(0, 500), /`measure:\$\{opts\.measureOnly\}`/, 'and a measure scope');
+  // Still never 'full', whichever path opened it.
+  assert.ok(!/values \('full'/.test(route));
+});
+
+test('no guard reads source without normalising line endings', () => {
+  // The guards in this repo assert on the SHAPE of source files, matching
+  // patterns that contain \n. Git on Windows checks files out as CRLF, so a
+  // raw readFileSync makes every such pattern miss — indexOf returns -1, a
+  // slice runs to end-of-file, and the assertion matches an unrelated
+  // function. One of them passed for the wrong reason for an hour.
+  //
+  // readSource normalises. This stops the next guard reintroducing it.
+  for (const file of [
+    '../sync/sync.test.ts',
+    '../intranet/project-sort.test.ts',
+    '../intranet/data/provider.test.ts',
+  ]) {
+    const src = readSource(new URL(file, import.meta.url));
+    assert.ok(
+      !/readFileSync\(/.test(src),
+      `${file} must use readSource, not readFileSync — CRLF breaks \n patterns`,
+    );
+  }
 });

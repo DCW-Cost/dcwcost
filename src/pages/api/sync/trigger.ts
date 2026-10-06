@@ -98,6 +98,24 @@ export const POST: APIRoute = async ({ request, url }) => {
   let runId: string;
   try {
     runId = await withDb(dbUrl!, async (db) => {
+      // A MEASURING RUN IS NOT A SYNC, and its row must not claim to be.
+      // The trigger opens the row and the background function adopts it, so
+      // the function's own labelling never runs — which left two
+      // measurements recorded as `scope phase1, dry_run false, succeeded`:
+      // a full-scope real sync that wrote nothing. That is not a cosmetic
+      // problem. It is read back by a person scanning sync_runs, and it
+      // misled me within two minutes of shipping it.
+      if (opts.measureOnly) {
+        const res = await db.query(
+          `insert into sync_runs (scope, dry_run, notes) values ($1, true, $2) returning id`,
+          [
+            `measure:${opts.measureOnly}`.slice(0, 60),
+            `sizing ${opts.measureOnly} only, via /api/sync/trigger. No mapping, no writes.`,
+          ]
+        );
+        return String(res.rows[0].id);
+      }
+
       const whole = tables.length === 6;
       const res = await db.query(
         // Never 'full': sweep_missing_from_airtable() refuses any scope that
