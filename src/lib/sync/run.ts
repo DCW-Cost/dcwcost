@@ -293,6 +293,13 @@ async function syncTable(
   const upsertSql = buildUpsert(t);
   const joinSql = new Map(joins.map((j) => [j.table, buildJoinUpsert(j)]));
 
+  // Totalled across pages, because the per-page line alone cannot answer
+  // the question the measurement exists for: whether memory tracks RECORDS
+  // or BYTES. Per-page averages on deliverables range 41-66 KB, so a table
+  // of narrower rows -- time_entries is person, date, hours, task -- would
+  // extrapolate completely differently under the two answers.
+  let bytesRead = 0;
+
   /** showRecords state, carried across pages so the cap means what it says. */
   let shownFuzzy = 0;
   let shownExact = 0;
@@ -304,13 +311,15 @@ async function syncTable(
     limiter,
     maxRecords: opts.sampleSize,
     measure: opts.measure,
-    onMeasure: (m) =>
+    onMeasure: (m) => {
+      bytesRead += m.bytes;
       log(
         `${key}: PAGE ${m.records} records, ${m.bytes} bytes on the wire ` +
           `(${Math.round(m.bytes / Math.max(m.records, 1))} avg/record); ` +
           `per record min ${m.perRecordMin}, median ${m.perRecordMedian}, max ${m.perRecordMax}` +
           (m.largestRecordId ? ` (largest: ${m.largestRecordId})` : '')
-      ),
+      );
+    },
   }, async (page) => {
     // The budget is consulted per page as well as per table and per join.
     // A table is now many writes spread over many pages, and the point of
@@ -546,6 +555,13 @@ async function syncTable(
   });
 
   log(`${key}: read ${total} from ${t.airtable}`);
+  if (opts.measure) {
+    log(
+      `${key}: TOTAL ${total} records, ${bytesRead} bytes on the wire ` +
+        `(${(bytesRead / 1024 / 1024).toFixed(1)} MB, ` +
+        `${Math.round(bytesRead / Math.max(total, 1))} avg/record)`
+    );
+  }
   if (result.skipped) {
     log(`${key}: skipped ${result.skipped} record(s) the database would have refused`);
   }
