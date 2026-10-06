@@ -1062,6 +1062,26 @@ async function recordTable(db: Db, runId: string, r: TableResult): Promise<void>
   );
 }
 
+/**
+ * SYNC_ANOMALIES IS A LOG, NOT A WORK QUEUE — and the difference bites.
+ *
+ * A DRY RUN WRITES ROWS HERE THAT ARE INDISTINGUISHABLE FROM A REAL RUN'S
+ * EXCEPT BY run_id. That is correct: a dry run's whole job is to report what
+ * a real one would find, and discarding its findings would make it useless.
+ *
+ * But it means ONE ROW DOES NOT MEAN ONE PROBLEM. The six out_of_office group
+ * events have twelve rows between them, because the dry run saw them and then
+ * the load saw them again. The two double-company contacts appear several
+ * times over for the same reason. Every re-run adds another copy of every
+ * standing issue.
+ *
+ * So anything reading this table — a review screen, a backfill, a count of
+ * outstanding issues, a dashboard — must filter by run_id, or dedupe, or
+ * count distinct. 018's backfill does (`select distinct`); without it the
+ * result was still correct, because the join's primary key absorbed it, but
+ * the inserted count would have read double and sent somebody hunting a bug
+ * that was not there.
+ */
 async function recordAnomalies(
   db: Db,
   runId: string,

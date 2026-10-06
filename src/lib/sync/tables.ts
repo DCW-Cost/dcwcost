@@ -442,6 +442,34 @@ export const TABLES: readonly TableSpec[] = [
   },
 
   // ===========================================================================
+  // SECOND STANDING RULE: TAKE LINK CARDINALITY FROM THE SCHEMA, NEVER FROM
+  // A SAMPLE. Any link whose field config says prefersSingleRecordLink:false
+  // gets checked across the FULL population before it becomes a scalar
+  // column — not sampled.
+  //
+  // out_of_office is why. Six of its 843 records are group events carrying
+  // two or three people, and a single person_id silently kept the first. A
+  // 100-row sample found none of them, and that was the EXPECTED result
+  // rather than bad luck: 6 in 843 means a 100-row sample misses them most
+  // of the time. No sample size anyone would actually reach for finds a
+  // rare-but-structural case reliably.
+  //
+  // The schema knew before any data did. "Collaborators" was declared
+  // prefersSingleRecordLink:false, which says Airtable PERMITS several —
+  // and permitted-but-unused is exactly the state that turns into used
+  // without anybody noticing. So the defence is not a bigger sample, it is
+  // reading the config and then counting the whole table.
+  //
+  // KNOWN TO NEED THIS when their maps are written:
+  //   Activity Log."Logged By"      --> Collaborators   (two separate person
+  //   Activity Log."Action Owner"   --> Collaborators    links on one table)
+  //   Time Tracking."DCW Project Pursuits" --> DCW Project Pursuits
+  //
+  // Checking is one query against the live table, and it is cheap at any
+  // size. The remaining tables hold 3,479, 3,569, 3,475 and 29,119 records,
+  // so anything learned from 100 of them is a claim about 100.
+  //
+  // ===========================================================================
   // STANDING RULE FOR THIS BASE: A LINK NAMED FOR A PROJECT USUALLY MEANS
   // TASK. Check what every link POINTS AT before mapping it. Three
   // instances, which makes it a convention rather than three accidents:
@@ -589,8 +617,32 @@ export const TABLES: readonly TableSpec[] = [
   {
     key: 'out_of_office',
     airtable: 'DCW Out of Office',
+    // A JOIN, NOT A COLUMN — and the 843-row load is why.
+    //
+    // This was person_id, a single uuid, until the first run over the whole
+    // table raised six "kept the first" anomalies. Six records are group
+    // events (site visits, a summit, a conference), and five of the six are
+    // category "In Person Client Meeting/Event", so it is a shape rather than
+    // six accidents.
+    //
+    // A SAMPLE OF 100 SAID ZERO. The population of 843 has six. That is the
+    // reason this is written down: the remaining tables are 3,479, 3,569,
+    // 3,475 and 29,119 rows, and "I sampled 100 and saw none" is a claim
+    // about 100 records.
+    //
+    // It matters more than 0.7% sounds because this feeds a calendar of who
+    // is out. "TD out on the 21st" when three people were away is the error
+    // somebody acts on — and the title still reads "TD + BB + TA", so the
+    // screen looks right while the query behind it is wrong.
+    //
+    // person_id was DROPPED rather than kept as "first attendee": two sources
+    // for one fact means every calendar query has to know which to trust.
+    // Same reasoning as time_entries.project_id in 017.
+    joins: [
+      { from: 'Collaborators', table: 'out_of_office_people',
+        parentColumn: 'out_of_office_id', childColumn: 'person_id', linkTo: 'people' },
+    ],
     fields: [
-      { from: 'Collaborators', to: 'person_id', kind: 'link', linkTo: 'people' },
       { from: 'Vacation Title', to: 'vacation_title', kind: 'text' },
       // THE TRAILING SPACE ON THE SIXTH CHOICE IS DELIBERATELY NOT COPIED.
       //

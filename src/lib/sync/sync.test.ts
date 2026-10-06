@@ -1376,16 +1376,27 @@ test('the standing rule about misleading link names is written down', () => {
 // out_of_office — first table after the rehearsal, 843 rows, one link.
 // ===========================================================================
 
-test('out_of_office resolves its only link against people', () => {
-  // Checked against the live base: "Collaborators" --> Collaborators, which
-  // is the table people mirrors. The one table of the five remaining whose
-  // only link is to people, which is why it goes first.
-  const f = spec('out_of_office').fields.find((x) => x.to === 'person_id');
-  assert.ok(f, 'person_id must be mapped');
-  assert.equal(f.kind, 'link');
-  assert.equal(f.linkTo, 'people');
-  const links = spec('out_of_office').fields.filter((x) => x.kind === 'link');
-  assert.equal(links.length, 1, 'out_of_office has exactly one link; a second one means the map drifted');
+test('out_of_office attendance is a join, not a column', () => {
+  // THE 843-ROW LOAD IS WHY. Six records are group events and a single uuid
+  // kept the first attendee, dropping 1-2 others. A sample of 100 had found
+  // none of them.
+  //
+  // person_id must NOT come back as a field: two sources for one fact means
+  // every calendar query has to know which to trust.
+  const s = spec('out_of_office');
+  assert.ok(
+    !s.fields.some((x) => x.to === 'person_id'),
+    'person_id was dropped in 018; a column holding the first attendee is worse than none'
+  );
+  assert.equal(s.fields.filter((x) => x.kind === 'link').length, 0, 'the only link became a join');
+
+  const j = s.joins?.find((x) => x.table === 'out_of_office_people');
+  assert.ok(j, 'attendance must be written to out_of_office_people');
+  assert.equal(j.from, 'Collaborators');
+  assert.equal(j.parentColumn, 'out_of_office_id');
+  assert.equal(j.childColumn, 'person_id');
+  assert.equal(j.linkTo, 'people', 'Collaborators --> Collaborators, checked against the live base');
+  assert.equal(s.joins?.length, 1, 'one join; a second means the map drifted');
 });
 
 test('the Category choice with a trailing space is written trimmed', () => {
@@ -1428,4 +1439,17 @@ test('out_of_office loads after the table it links to', () => {
     LOAD_ORDER.indexOf('people') < LOAD_ORDER.indexOf('out_of_office'),
     'person_id cannot resolve unless people is loaded first'
   );
+});
+
+test('the cardinality rule is written down where the next maps get written', () => {
+  // out_of_office lost people on 6 of 843 rows and a 100-row sample found
+  // none of them. The schema knew first: prefersSingleRecordLink:false.
+  // This guard exists so the rule survives in the file the next four maps
+  // are written into, not only in a commit message.
+  const src = readSource(new URL('./tables.ts', import.meta.url));
+  assert.match(src, /TAKE LINK CARDINALITY FROM THE SCHEMA, NEVER FROM\s*\n\s*\/\/ A SAMPLE/);
+  assert.match(src, /prefersSingleRecordLink:false/);
+  // And the tables already known to need it, so nobody re-derives the list.
+  assert.match(src, /Activity Log\."Logged By"/);
+  assert.match(src, /Activity Log\."Action Owner"/);
 });
