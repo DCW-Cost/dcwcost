@@ -89,11 +89,23 @@ create policy out_of_office_people_sync_upd on out_of_office_people
 -- produce a join table holding six rows and a calendar showing six people,
 -- because dropping person_id removes the other 837 as well.
 --
--- Part one carries every existing link: 837 single-person records plus the
--- first attendee of each of the 6 groups = 843.
--- Part two adds the 8 who were dropped (14 people across 6 records, less the
--- 6 firsts already carried by part one).
--- Expected total: 851.
+-- Part one carries every link person_id actually holds — which is 765, NOT
+-- 843, because 78 of the 843 records have no person at all. They are
+-- company-wide entries: Information (39), Holiday Observance (24), DCW Team
+-- Event (13), plus two individual records nobody tagged. A company holiday
+-- belongs to no one, so those records correctly end up with zero links.
+-- Part two adds the 8 who were dropped (14 distinct people across 6 records,
+-- less the 6 firsts already carried by part one).
+-- Expected total: 773, across 765 of the 843 records.
+--
+-- THE FIRST VERSION OF THIS COMMENT SAID 851, and the verification below
+-- said to treat anything less as a failure. That number came from reasoning
+-- — "one link per record, 843 records" — rather than from the null count
+-- that had already been measured on this very table. A verification whose
+-- expected value is derived instead of measured is worse than no
+-- verification: it manufactures a false failure, and had the arithmetic
+-- slipped the other way it would have manufactured a false pass. Both read
+-- as information.
 -- ============================================================================
 
 -- PART ONE — everything person_id currently holds.
@@ -154,8 +166,8 @@ alter table out_of_office drop column if exists person_id;
 -- Uncomment and run as a second query. Every row should read exactly this:
 --
 --   out_of_office rows                843
---   attendance links                  851
---   people covered                    843
+--   attendance links                  773
+--   people covered                    765
 --   records with more than one        6
 --   the three-person records          2
 --   person_id gone                    true
@@ -163,9 +175,17 @@ alter table out_of_office drop column if exists person_id;
 --   SYNC CAN UPDATE synced_at         true
 --   nobody orphaned                   0
 --
--- "attendance links 851" is the row this migration exists to prove, and 843
--- would be the failure that looks like success: it means part two found
--- nothing and the group events are still showing one person each.
+-- VERIFIED AGAINST PRODUCTION 2026-10-06. These are measured values, not
+-- predicted ones — see the note above about the first version of this block,
+-- which predicted 851 and would have reported a correct migration as failed.
+--
+-- "records with more than one 6" and "the three-person records 2" are the
+-- rows this migration exists to prove, and they are better evidence than the
+-- total: they say the group events kept all their people. The six records
+-- hold 3, 3, 2, 2, 2, 2 links, matching Airtable exactly.
+--
+-- 843 - 765 = 78 records with no links at all. That is correct, not missing
+-- data: those records have no person in Airtable either.
 --
 -- "SYNC CAN UPDATE synced_at" is not padding. The grant is COLUMN-level, so
 -- the obvious check — has_table_privilege(...,'UPDATE') — reads FALSE on a
