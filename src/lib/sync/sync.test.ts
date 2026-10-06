@@ -1371,3 +1371,61 @@ test('the standing rule about misleading link names is written down', () => {
   // And the exception, so nobody re-checks it or assumes it is wrong too.
   assert.match(src, /Project Notes\."DCW Projects" GENUINELY POINTS AT New Project Entry/);
 });
+
+// ===========================================================================
+// out_of_office — first table after the rehearsal, 843 rows, one link.
+// ===========================================================================
+
+test('out_of_office resolves its only link against people', () => {
+  // Checked against the live base: "Collaborators" --> Collaborators, which
+  // is the table people mirrors. The one table of the five remaining whose
+  // only link is to people, which is why it goes first.
+  const f = spec('out_of_office').fields.find((x) => x.to === 'person_id');
+  assert.ok(f, 'person_id must be mapped');
+  assert.equal(f.kind, 'link');
+  assert.equal(f.linkTo, 'people');
+  const links = spec('out_of_office').fields.filter((x) => x.kind === 'link');
+  assert.equal(links.length, 1, 'out_of_office has exactly one link; a second one means the map drifted');
+});
+
+test('the Category choice with a trailing space is written trimmed', () => {
+  // AIRTABLE'S OPTION IS LITERALLY "In Person Client Meeting/Event " WITH A
+  // TRAILING SPACE. unknownChoice trims the incoming value and compares it
+  // against this list UNTRIMMED, so copying Airtable verbatim would raise a
+  // false unknown_choice on every record using that category.
+  //
+  // This test exists because the verbatim copy is the obvious "fix" for
+  // anyone who later diffs the list against the base and finds it differs.
+  const category = spec('out_of_office').fields.find((x) => x.to === 'category');
+  assert.ok(category?.choices, 'category must carry its choices');
+  for (const c of category.choices) {
+    assert.equal(c, c.trim(), `choice ${JSON.stringify(c)} must be stored trimmed`);
+  }
+  // And the behaviour that makes it matter, rather than just the shape:
+  assert.equal(
+    unknownChoice(category.choices, 'In Person Client Meeting/Event '),
+    null,
+    "Airtable's trailing-space value must match the trimmed list"
+  );
+});
+
+test('out_of_office takes its created date from record metadata', () => {
+  // "Created On" is a createdTime field: date-only, so it reads UTC midnight
+  // and renders a day early in Pacific. The metadata carries the real instant.
+  assert.equal(spec('out_of_office').createdAtColumn, 'created_on');
+  const fromField = spec('out_of_office').fields.find((x) => x.to === 'created_on');
+  assert.equal(fromField, undefined, 'created_on must not also be mapped as a field');
+});
+
+test('out_of_office leaves attachments unmapped', () => {
+  // Airtable attachment URLs expire after about two hours.
+  const mapped = spec('out_of_office').fields.map((f) => f.to);
+  assert.ok(!mapped.includes('attachments_paths'), 'attachment URLs expire; do not mirror them');
+});
+
+test('out_of_office loads after the table it links to', () => {
+  assert.ok(
+    LOAD_ORDER.indexOf('people') < LOAD_ORDER.indexOf('out_of_office'),
+    'person_id cannot resolve unless people is loaded first'
+  );
+});

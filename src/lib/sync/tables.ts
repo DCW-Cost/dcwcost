@@ -39,6 +39,8 @@ export const LOAD_ORDER = [
   'subconsultant_tasks',
   'subconsultant_invoices',
   'bid_results',
+  // Links only to people, which is first, so anywhere after that is safe.
+  'out_of_office',
 ] as const;
 
 export type TableKey = (typeof LOAD_ORDER)[number];
@@ -568,6 +570,87 @@ export const TABLES: readonly TableSpec[] = [
     // "Date Added" is a createdTime field, so it comes from record metadata
     // rather than from `fields` — see TableSpec.createdAtColumn.
     createdAtColumn: 'date_added',
+  },
+
+  // ===========================================================================
+  // out_of_office — 843 rows, 18 Airtable fields, ONE link.
+  //
+  // Chosen as the first table after the rehearsal because it is the only one
+  // of the five remaining whose only link is to people. project_notes has one
+  // person link tangled with two project/task links; activity_log has two
+  // person links plus a task link. Here a people-side resolution failure
+  // arrives alone, on 843 rows rather than time_entries' 29,119.
+  //
+  // THE LINK, CHECKED RATHER THAN ASSUMED: "Collaborators" --> Collaborators,
+  // which is the table people mirrors. Name and target agree, which is worth
+  // stating only because on three other tables in this base they do not.
+  // ===========================================================================
+
+  {
+    key: 'out_of_office',
+    airtable: 'DCW Out of Office',
+    fields: [
+      { from: 'Collaborators', to: 'person_id', kind: 'link', linkTo: 'people' },
+      { from: 'Vacation Title', to: 'vacation_title', kind: 'text' },
+      // THE TRAILING SPACE ON THE SIXTH CHOICE IS DELIBERATELY NOT COPIED.
+      //
+      // Airtable's option is literally "In Person Client Meeting/Event " with
+      // a trailing space. unknownChoice trims the INCOMING value and compares
+      // it against this list UNTRIMMED (coerce.ts: `k.toLowerCase() ===
+      // t.toLowerCase()`), so a verbatim copy would never match and every
+      // record using that category would raise a false unknown_choice.
+      //
+      // Trimmed is also what gets stored: coerce('text') writes name.trim().
+      // So the list, the comparison and the column all agree on the trimmed
+      // form, and the only thing with a trailing space is Airtable.
+      {
+        from: 'Category',
+        to: 'category',
+        kind: 'text',
+        choices: [
+          'Teammate OOO',
+          'Appointment',
+          'Working Remote',
+          'Sick Day',
+          'Teammate OOO - Half Day',
+          'In Person Client Meeting/Event',
+          'Volunteer',
+          'Classes / Education',
+          'Information',
+          'Birthday',
+          'Holiday Observance',
+          'DCW Team Event',
+          'Employee Work Anniversary',
+          'Maternity/Paternity Leave',
+          'Bereavement',
+        ],
+      },
+      {
+        from: 'Approval',
+        to: 'approval',
+        kind: 'text',
+        choices: ['Waiting for Approval', 'Approved', 'Not Approved'],
+      },
+      { from: 'Start Date', to: 'start_date', kind: 'date' },
+      { from: 'End Date', to: 'end_date', kind: 'date' },
+      { from: 'Notes', to: 'notes', kind: 'text' },
+      // attachments_paths: NOT MAPPED, same reason as the invoices and bid
+      // results. Airtable attachment URLs expire after about two hours, so
+      // mirroring one stores a link that is dead before anybody clicks it.
+      //
+      // NINE MORE FIELDS ARE UNMAPPED AND ALL OF THEM ARE DERIVED: "Softr
+      // Title", "Start & End Date" and "Total Days" are formulas over columns
+      // mirrored here; "Image", "Color Code", "Email", "Email (from
+      // Collaborators) 2" and "Status" are lookups through the Collaborators
+      // link, so they are reachable through person_id; "Created By" is an
+      // Airtable user, not a Collaborators record, and has no column.
+      //
+      // That is 18 fields: 7 mapped, 1 createdTime below, 1 attachment, 9
+      // derived.
+    ],
+    // "Created On" is a createdTime field, so it comes from record metadata
+    // rather than from `fields` — see TableSpec.createdAtColumn.
+    createdAtColumn: 'created_on',
   },
 
 ];
