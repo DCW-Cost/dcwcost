@@ -1267,3 +1267,97 @@ test('an unresolved link is not counted as a disappeared one', () => {
   const resolve = src.indexOf('const childUuid = childKeys?.get(childId);');
   assert.ok(mark > 0 && resolve > mark, 'the link must be marked seen before resolution is attempted');
 });
+
+// -------------------------------------- phase two: the three-table rehearsal
+
+test('the rehearsal tables load after what they link to', () => {
+  // subconsultant_invoices links to subconsultant_tasks, which links to
+  // deliverables and subconsultants. Out of order, every link resolves to
+  // nothing and the run reports thousands of unresolved parents instead of
+  // a dependency mistake.
+  const order = [...LOAD_ORDER];
+  const at = (k: string) => order.indexOf(k as never);
+  assert.ok(at('subconsultant_tasks') > at('deliverables'));
+  assert.ok(at('subconsultant_tasks') > at('subconsultants'));
+  assert.ok(at('subconsultant_invoices') > at('subconsultant_tasks'));
+  assert.ok(at('bid_results') > at('projects'));
+});
+
+test('every rehearsal link points where the field map says', () => {
+  // VERIFIED AGAINST THE LIVE BASE, not inferred from field names — which
+  // is the check that found two of these four are named for something
+  // other than their target.
+  const expected: Array<[string, string, string]> = [
+    // table, column, the mirror table it resolves against
+    ['subconsultant_tasks', 'deliverable_id', 'deliverables'],
+    ['subconsultant_tasks', 'subconsultant_id', 'subconsultants'],
+    ['subconsultant_invoices', 'subconsultant_task_id', 'subconsultant_tasks'],
+    ['subconsultant_invoices', 'subconsultant_id', 'subconsultants'],
+    ['bid_results', 'project_id', 'projects'],
+  ];
+  for (const [table, column, target] of expected) {
+    const f = spec(table as never).fields.find((x) => x.to === column);
+    assert.ok(f, `${table}.${column} must be mapped`);
+    assert.equal(f.kind, 'link', `${table}.${column} must be a link`);
+    assert.equal(f.linkTo, target, `${table}.${column} must resolve against ${target}`);
+  }
+});
+
+test('the two misleading link names are mapped to their target, not their name', () => {
+  // "Project" on Subconsultant Tasks points at DCW PROJECT TASKS.
+  // "Task" on Subconsultant Invoices points at SUBCONSULTANT TASKS.
+  // Both would be wrong if mapped by what they are called, and the second
+  // needed a migration because the column waiting for it referenced the
+  // wrong table entirely.
+  const project = spec('subconsultant_tasks').fields.find((f) => f.from === 'Project');
+  assert.equal(project?.to, 'deliverable_id');
+  assert.equal(project?.linkTo, 'deliverables');
+
+  const task = spec('subconsultant_invoices').fields.find((f) => f.from === 'Task');
+  assert.equal(task?.to, 'subconsultant_task_id');
+  assert.equal(task?.linkTo, 'subconsultant_tasks');
+
+  // And the column that referenced the wrong table must not be mapped.
+  assert.ok(!spec('subconsultant_invoices').fields.some((f) => f.to === 'deliverable_id'));
+});
+
+test('bids_received is text, because "10 or more" is not a number', () => {
+  // Against an integer it either fails to coerce or silently becomes 10 —
+  // and 10 is a plausible bid count nobody would question, which makes the
+  // silent version the dangerous one.
+  const f = spec('bid_results').fields.find((x) => x.to === 'bids_received');
+  assert.equal(f?.kind, 'text');
+  assert.ok(f?.choices?.includes('10 or more'));
+  assert.equal(f?.choices?.length, 10);
+});
+
+test('the rehearsal choices are written down so a rename is caught', () => {
+  // unknown_choice only fires against a list. A renamed option in Airtable
+  // is a two-second edit with no visible consequence there.
+  assert.equal(spec('subconsultant_tasks').fields.find((f) => f.to === 'status')?.choices?.length, 4);
+  assert.equal(spec('subconsultant_invoices').fields.find((f) => f.to === 'status')?.choices?.length, 3);
+});
+
+test('attachment columns are left unmapped on purpose', () => {
+  // Airtable attachment URLs expire after about two hours, so storing one
+  // stores a link that is dead before anybody clicks it. These need
+  // downloading into the airtable-mirror bucket, which is separate work.
+  for (const [table, column] of [
+    ['subconsultant_invoices', 'invoice_paths'],
+    ['subconsultant_invoices', 'payment_confirmation_paths'],
+    ['bid_results', 'attachment_paths'],
+  ] as const) {
+    assert.ok(
+      !spec(table).fields.some((f) => f.to === column),
+      `${table}.${column} must not be mapped to an expiring URL`,
+    );
+  }
+});
+
+test('bid_results takes its created date from record metadata', () => {
+  // "Date Added" is a createdTime field. Mapping it as a field would get a
+  // date-only value and store UTC midnight — a day early in Pacific, on
+  // every row, with nothing in the data to reveal it.
+  assert.equal(spec('bid_results').createdAtColumn, 'date_added');
+  assert.ok(!spec('bid_results').fields.some((f) => f.to === 'date_added'));
+});

@@ -29,6 +29,16 @@ export const LOAD_ORDER = [
   'contacts',
   'projects',
   'deliverables',
+  // PHASE TWO BEGINS HERE, and these three are the rehearsal: 33 rows and
+  // 69 Airtable fields across tables nothing yet depends on. They go first
+  // precisely because they are cheap to get wrong.
+  //
+  // Order still matters. subconsultant_tasks links to deliverables and
+  // subconsultants, both above it; subconsultant_invoices links to
+  // subconsultant_tasks, so it must follow it.
+  'subconsultant_tasks',
+  'subconsultant_invoices',
+  'bid_results',
 ] as const;
 
 export type TableKey = (typeof LOAD_ORDER)[number];
@@ -428,6 +438,112 @@ export const TABLES: readonly TableSpec[] = [
       { from: 'Last Modified Time', to: 'airtable_last_modified_at', kind: 'timestamptz' },
     ],
   },
+
+  // ===========================================================================
+  // PHASE TWO — the rehearsal. Three tables, 33 rows, 69 Airtable fields.
+  //
+  // Every link below was verified by checking WHAT IT POINTS AT, not what it
+  // is called. That check found two of four link fields here are named for
+  // something other than their target, and one was a genuine mismatch
+  // requiring migration 016. It is the same check that caught
+  // "Subconsultants" on DCW Project Tasks pointing at Subconsultant Tasks in
+  // phase one.
+  // ===========================================================================
+
+  {
+    key: 'subconsultant_tasks',
+    airtable: 'Subconsultant Tasks',
+    fields: [
+      // "Project" LINKS TO DCW PROJECT TASKS, NOT TO PROJECTS. The field is
+      // named for a project and points at a task — which is why the mirror
+      // column is deliverable_id and why mapping this by its name would have
+      // produced a project_id column that does not exist on this table.
+      //
+      // The lookups hanging off it confirm the target rather than relying on
+      // the link alone: "Task Fee (from Project)" and
+      // "Image (from Project Manager *) (from Project)" are both DCW Project
+      // Tasks fields.
+      { from: 'Project', to: 'deliverable_id', kind: 'link', linkTo: 'deliverables' },
+      { from: 'Subconsultants', to: 'subconsultant_id', kind: 'link', linkTo: 'subconsultants' },
+      // Four choices, written down while they are visible. unknown_choice
+      // only fires against a list, and a renamed option in Airtable is a
+      // two-second edit with no visible consequence there.
+      {
+        from: 'Status',
+        to: 'status',
+        kind: 'text',
+        choices: [
+          'Initial Reach Out Required',
+          'Sent Fee Proposal',
+          'Confirmed Involvement',
+          'Complete',
+        ],
+      },
+      { from: 'Notes', to: 'notes', kind: 'text' },
+    ],
+  },
+
+  {
+    key: 'subconsultant_invoices',
+    airtable: 'Subconsultant Invoices',
+    fields: [
+      // "Task" LINKS TO SUBCONSULTANT TASKS, not to DCW Project Tasks. The
+      // mirror had deliverable_id waiting for it, which referenced the wrong
+      // table entirely; migration 016 adds subconsultant_task_id and drops
+      // deliverable_id rather than deriving a link the source never asserts.
+      { from: 'Task', to: 'subconsultant_task_id', kind: 'link', linkTo: 'subconsultant_tasks' },
+      { from: 'Subconsultant', to: 'subconsultant_id', kind: 'link', linkTo: 'subconsultants' },
+      { from: 'Invoice #', to: 'invoice', kind: 'text' },
+      { from: 'Total', to: 'total', kind: 'numeric' },
+      {
+        from: 'Status',
+        to: 'status',
+        kind: 'text',
+        choices: ['Received', 'Waiting Confirmation', 'Paid'],
+      },
+      { from: 'Date Received', to: 'date_received', kind: 'date' },
+      { from: 'Date Paid', to: 'date_paid', kind: 'date' },
+      { from: 'Notes', to: 'notes', kind: 'text' },
+      // invoice_paths and payment_confirmation_paths are attachment columns.
+      // NOT MAPPED, deliberately: Airtable attachment URLs expire after about
+      // two hours, so storing one is storing a link that is dead by the time
+      // anybody clicks it. Attachments need downloading into the
+      // airtable-mirror bucket, which is its own piece of work.
+    ],
+  },
+
+  {
+    key: 'bid_results',
+    airtable: 'Bid Results',
+    fields: [
+      // "Link to Project" does point at New Project Entry. Checked rather
+      // than assumed, which is the only reason that sentence is worth
+      // writing.
+      { from: 'Link to Project', to: 'project_id', kind: 'link', linkTo: 'projects' },
+      { from: 'Our Number', to: 'our_number', kind: 'numeric' },
+      { from: 'Low Bid (Excluding Outliers)', to: 'low_bid', kind: 'numeric' },
+      { from: 'High Bid (Excluding Outliers)', to: 'high_bid', kind: 'numeric' },
+      { from: 'Closest Bid To Our Number', to: 'closest_bid_to_our_number', kind: 'numeric' },
+      // TEXT, not integer, and migration 016 changes the column to match.
+      // The Airtable field is a singleSelect whose choices are 1-9 and
+      // "10 or more". Against an integer that last value either fails to
+      // coerce or silently becomes 10 — and 10 is a plausible bid count that
+      // nobody would question, which makes the silent version the worse one.
+      {
+        from: '# of Bids Recieved',
+        to: 'bids_received',
+        kind: 'text',
+        choices: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10 or more'],
+      },
+      { from: 'Link to Bid Report', to: 'link_to_bid_report', kind: 'text' },
+      { from: 'Notes', to: 'notes', kind: 'text' },
+      // attachment_paths: same attachment problem as the invoices above.
+    ],
+    // "Date Added" is a createdTime field, so it comes from record metadata
+    // rather than from `fields` — see TableSpec.createdAtColumn.
+    createdAtColumn: 'date_added',
+  },
+
 ];
 
 export function spec(key: TableKey): TableSpec {
