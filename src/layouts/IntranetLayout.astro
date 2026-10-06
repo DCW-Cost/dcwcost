@@ -14,23 +14,40 @@
  */
 import '../styles/intranet.css';
 import Sidebar from '../components/intranet/Sidebar.astro';
-import { provider, usingFixtures } from '../lib/intranet/data/index.ts';
+import { getProvider, usingFixtures } from '../lib/intranet/data/index.ts';
 import { authConfigured } from '../lib/intranet/auth.ts';
 
 export interface Props {
   title: string;
   crumb?: string;
   meta?: string[];
-  section: 'library' | 'estimates' | 'queue' | 'documents' | 'wishlist' | 'faq' | 'admin';
+  section: 'library' | 'projects' | 'estimates' | 'queue' | 'documents' | 'wishlist' | 'faq' | 'admin';
 }
 
 const { title, crumb, meta = [], section } = Astro.props;
+
+// REQUEST-BOUND, and it has to be. This shell used the module-level
+// `provider`, which under INTRANET_DATA=supabase is a Proxy that throws on
+// any access — so the first real-data deploy would have taken down every
+// page in the intranet, including pages that had been migrated correctly,
+// from the layout they all share. getOpenQuestions() ran unconditionally,
+// so not even a signed-in session avoided it.
+const provider = getProvider(Astro.cookies, Astro.request);
 
 // The middleware has already resolved who this is and turned away anyone who
 // shouldn't be here, so by the time a page renders there is always a profile.
 // The fixture user is the fallback only in demo mode.
 const user = Astro.locals.profile ?? (await provider.getCurrentUser());
-const openQuestions = (await provider.getOpenQuestions()).length;
+
+// The sidebar badge is a nicety; it must not be able to blank the page it
+// decorates. A reader-queue query that fails takes the count with it and
+// nothing else.
+let openQuestions = 0;
+try {
+  openQuestions = (await provider.getOpenQuestions()).length;
+} catch (err) {
+  console.error('[intranet] open-question count unavailable:', err);
+}
 ---
 
 <!doctype html>
