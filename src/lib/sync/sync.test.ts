@@ -14,7 +14,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
-import { buildJoinUpsert, buildUpsert, columnsFor, completedAtOnInsert, planJoins, planRow, updatedColumns } from './plan.ts';
+import {
+  buildBatchUpsert,
+  buildJoinUpsert,
+  buildUpsert,
+  columnsFor,
+  completedAtOnInsert,
+  maxRowsPerStatement,
+  planJoins,
+  planRow,
+  updatedColumns,
+} from './plan.ts';
 import { KNOWN_SKIPS, LOAD_ORDER, spec, TABLES } from './tables.ts';
 import { renderPlan, selectedTables } from './run.ts';
 import { parseSyncRequest } from './request.ts';
@@ -997,8 +1007,13 @@ test('join rows are written beside their parents, from the returned uuid', () =>
   // The structural change. Joins used to need a second pass over every
   // record because a parent's uuid was only knowable after the fact.
   const src = readSource(new URL('./run.ts', import.meta.url));
-  assert.match(src, /parentKeys\.set\(p\.airtableRecordId, String\(row\.id\)\)/);
+  assert.match(src, /parentKeys\.set\(recordId, String\(row\.id\)\)/);
   assert.ok(!src.includes('async function syncJoin'), 'the second pass is gone');
+  // MATCHED BY KEY, NEVER BY POSITION. RETURNING order is unspecified, so
+  // zipping the returned rows against what was sent would attach uuids to
+  // the wrong records — silently, and only when Postgres happened to
+  // reorder. The key has to come back in the clause for that reason.
+  assert.match(src, /const recordId = String\(row\.airtable_record_id\)/);
 });
 
 test('the key map is published before the first page, and grows', () => {
@@ -1144,4 +1159,77 @@ test('no guard reads source without normalising line endings', () => {
       `${file} must use readSource, not readFileSync — CRLF breaks \n patterns`,
     );
   }
+});
+
+// --------------------------------------------- one statement, many rows
+
+test('the batch size is derived from the column count, never assumed', () => {
+  // Postgres accepts 65,535 bind parameters per statement and a batch
+  // spends rows x columns of them. A hardcoded size would be fine until a
+  // table wide enough to exceed it, where the failure is at execution.
+  const deliverables = maxRowsPerStatement(spec('deliverables'));
+  const contacts = maxRowsPerStatement(spec('contacts'));
+  assert.ok(deliverables < contacts, 'a wider table must allow fewer rows');
+  // Columns, not columns + 1: synced_at is now() in the statement, not a
+  // bound parameter. Getting that wrong understates the ceiling, which is
+  // the safe direction — but it is also how a correct implementation gets
+  // "fixed" into a slower one.
+  for (const key of ['deliverables', 'contacts'] as const) {
+    const cols = columnsFor(spec(key)).length;
+    const rows = maxRowsPerStatement(spec(key));
+    assert.ok(rows * cols <= 65535, `${key}: ${rows} x ${cols} must fit in 65,535 parameters`);
+    assert.ok((rows + 1) * cols > 65535, `${key}: must be the largest batch that fits`);
+    // And the generated statement must actually bind that many.
+    assert.equal((buildBatchUpsert(spec(key), 3).match(/\$\d+/g) ?? []).length, cols * 3);
+  }
+  // And it must be visible, or a slow run has nothing on screen to explain it.
+  const src = readSource(new URL('./run.ts', import.meta.url));
+  assert.match(src, /writing in batches of \$\{batchRows\} \(\$\{columnsFor\(t\)\.length\} columns\)/);
+});
+
+test('a batch statement binds every row and returns the key', () => {
+  const sql = buildBatchUpsert(spec('people'), 3);
+  const cols = columnsFor(spec('people')).length;
+  assert.equal((sql.match(/\$\d+/g) ?? []).length, cols * 3, 'every column of every row is bound');
+  assert.match(sql, /returning airtable_record_id, id, \(xmax = 0\) as inserted/);
+  // Without the key there is no correspondence between sent and returned.
+  assert.match(sql, /returning airtable_record_id/);
+  assert.equal((sql.match(/now\(\)/g) ?? []).length, 4, 'synced_at per row, plus the DO UPDATE');
+});
+
+test('duplicate keys in one batch are recorded, not silently dropped', () => {
+  // ON CONFLICT DO UPDATE refuses when a key appears twice in one
+  // statement — "cannot affect row a second time". That cannot happen one
+  // row at a time, so it is new. Dropping the duplicate quietly would hide
+  // whether Airtable returned it twice or a page boundary overlapped.
+  const src = readSource(new URL('./run.ts', import.meta.url));
+  assert.match(src, /the same Airtable record id appeared twice/);
+  assert.match(src, /const byKey = new Map<string, RowPlan>\(\)/);
+  // Join pairs are deduped too, but a repeated link is benign and needs no
+  // anomaly — the link is recorded once either way.
+  assert.match(src, /const seenPairs = new Set<string>\(\)/);
+});
+
+test('a failed batch is replayed row by row, and writes nothing doing it', () => {
+  // A bad row was ALREADY batch-wide and run-fatal: inTransaction wraps the
+  // page, so one failing query rolled all of them back. That is how
+  // client_companies died after 200 rows had committed. Batching costs
+  // diagnosability, not blast radius — and the replay buys it back better,
+  // because it names every bad row rather than the first.
+  const src = readSource(new URL('./run.ts', import.meta.url));
+  const fn = src.slice(src.indexOf('export async function findOffendingRows'));
+  assert.match(fn.slice(0, 1200), /savepoint probe/, 'savepoints, so a good row cannot commit');
+  assert.match(fn.slice(0, 1200), /rollback to savepoint probe/);
+  assert.match(fn.slice(0, 1400), /finally \{[\s\S]*?rollback/, 'and the whole thing is always undone');
+  assert.match(src, /offending row\(s\)/, 'the error names records, not just a constraint');
+});
+
+test('blocked rows are named, not counted', () => {
+  // A row the DO UPDATE's WHERE or a policy excluded does not come back, so
+  // blocked is the set difference. The single-row version could only report
+  // rowCount 0 — a number with no record attached.
+  const src = readSource(new URL('./run.ts', import.meta.url));
+  assert.match(src, /const wrote = new Set<string>\(\)/);
+  assert.match(src, /if \(wrote\.has\(p\.airtableRecordId\)\) continue;/);
+  assert.match(src, /upsert returned no row/);
 });
