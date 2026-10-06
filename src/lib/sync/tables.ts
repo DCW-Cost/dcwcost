@@ -589,8 +589,32 @@ export const TABLES: readonly TableSpec[] = [
   {
     key: 'out_of_office',
     airtable: 'DCW Out of Office',
+    // A JOIN, NOT A COLUMN — and the 843-row load is why.
+    //
+    // This was person_id, a single uuid, until the first run over the whole
+    // table raised six "kept the first" anomalies. Six records are group
+    // events (site visits, a summit, a conference), and five of the six are
+    // category "In Person Client Meeting/Event", so it is a shape rather than
+    // six accidents.
+    //
+    // A SAMPLE OF 100 SAID ZERO. The population of 843 has six. That is the
+    // reason this is written down: the remaining tables are 3,479, 3,569,
+    // 3,475 and 29,119 rows, and "I sampled 100 and saw none" is a claim
+    // about 100 records.
+    //
+    // It matters more than 0.7% sounds because this feeds a calendar of who
+    // is out. "TD out on the 21st" when three people were away is the error
+    // somebody acts on — and the title still reads "TD + BB + TA", so the
+    // screen looks right while the query behind it is wrong.
+    //
+    // person_id was DROPPED rather than kept as "first attendee": two sources
+    // for one fact means every calendar query has to know which to trust.
+    // Same reasoning as time_entries.project_id in 017.
+    joins: [
+      { from: 'Collaborators', table: 'out_of_office_people',
+        parentColumn: 'out_of_office_id', childColumn: 'person_id', linkTo: 'people' },
+    ],
     fields: [
-      { from: 'Collaborators', to: 'person_id', kind: 'link', linkTo: 'people' },
       { from: 'Vacation Title', to: 'vacation_title', kind: 'text' },
       // THE TRAILING SPACE ON THE SIXTH CHOICE IS DELIBERATELY NOT COPIED.
       //
