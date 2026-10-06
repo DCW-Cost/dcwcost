@@ -42,16 +42,20 @@ const BATCH = 200;
  *   seconds earlier, when the trigger opens it, so a row showing ~15:15 is a
  *   function that got its full fifteen.
  *
- *   write rate was about 20 rows/sec on narrow tables and 17 on
- *   deliverables, with 16,592 rows taking ~15 minutes and not finishing.
+ *   WRITE RATE: 164 rows/sec. Measured 6 October 2026 on the batched
+ *   path — 16,603 rows across projects, deliverables and their four join
+ *   tables, in 101 seconds, every table reconciling with 0 blocked and 0
+ *   unresolved. That is the number to size future work against.
  *
- *   THAT FIGURE IS HISTORICAL AND HAS NOT BEEN RE-MEASURED. It was one
- *   round trip per row, which batched inserts replaced; the real rate is
- *   now expected to be an order of magnitude higher and nobody has checked.
- *   It is left here only because phase two would otherwise be sized against
- *   a number with no provenance at all — but sizing anything against this
- *   one without re-measuring first would be sizing against a fact that
- *   stopped being true.
+ *   THE PREVIOUS FIGURE WAS 16.3 rows/sec, and the tenfold gap is real
+ *   rather than a typo. It was one round trip per row, measured the same
+ *   morning on the same tables: 10,942 rows in 671 seconds. Batched
+ *   inserts replaced it, and both numbers are kept so nobody reads the
+ *   jump as an error and quietly "corrects" it back.
+ *
+ *   What that buys: Time Tracking's 29,119 records go from 28 minutes,
+ *   which does not fit, to about three, which does. Phase two's eight
+ *   tables together are roughly four minutes of writing.
  *
  * THE BUDGET ONLY WORKS IF IT IS CHECKED. On that run it never fired,
  * because it was checked between tables in LOAD_ORDER and nowhere else, and
