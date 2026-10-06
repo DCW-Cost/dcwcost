@@ -116,8 +116,26 @@ on conflict do nothing;
 -- nine attendees WOULD be truncated and would fail to parse as jsonb. The
 -- verification below counts the result rather than trusting that, and if a
 -- future table hits this, the fix is to widen the slice, not to re-read.
+--
+-- THE DISTINCT IS NOT DECORATION, and the reason is a general property of
+-- sync_anomalies worth knowing before anything else reads that table:
+--
+--   A DRY RUN WRITES ANOMALY ROWS THAT ARE INDISTINGUISHABLE FROM A REAL
+--   RUN'S EXCEPT BY run_id.
+--
+-- These 6 records were seen by the dry run AND by the real load, so there are
+-- 12 anomaly rows, not 6, and undeduped this statement would process 28 link
+-- values rather than 14. The primary key means the RESULT is correct either
+-- way — but the inserted count would read 28-ish and look wrong, and anybody
+-- checking it would go looking for a bug that is not there.
+--
+-- The same applies to anything treating sync_anomalies as a work queue: a
+-- review screen, a backfill, a count of outstanding issues. The two
+-- double-company contacts are in there several times over for the same
+-- reason. Filter by run_id, or dedupe, or count distinct — but do not assume
+-- one row means one problem.
 insert into out_of_office_people (out_of_office_id, person_id)
-select o.id, p.id
+select distinct o.id, p.id
   from sync_anomalies a
   join out_of_office o on o.airtable_record_id = a.airtable_record_id
   cross join lateral jsonb_array_elements_text(a.airtable_value::jsonb) as link(rec)
