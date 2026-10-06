@@ -15,7 +15,7 @@
  */
 import type { Db } from './db.ts';
 import { inTransaction } from './db.ts';
-import { RateLimiter, readTable, type AirtableRecord } from './airtable.ts';
+import { RateLimiter, streamTable, type AirtableRecord } from './airtable.ts';
 import { KNOWN_SKIPS, LOAD_ORDER, spec, TABLES, type JoinSpec, type TableKey, type TableSpec } from './tables.ts';
 import { buildJoinUpsert, buildUpsert, columnsFor, planJoins, planRow, type Issue, type RowPlan } from './plan.ts';
 
@@ -194,6 +194,32 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
   return { runId, tables: results };
 }
 
+/**
+ * One table, a page at a time.
+ *
+ * NOTHING HERE OUTLIVES THE PAGE IT CAME FROM, and that is the whole point.
+ * The previous version read every record into an array, planned every row,
+ * wrote them, and only then built the join tables from the same array. For
+ * deliverables that is 5,557 records at ~60 KB each — 334 MB of raw JSON —
+ * and a run was measured at 821 MB of a 1,024 MB limit. Time Tracking is
+ * 29,119 records, so the table was not a slow load, it was an unloadable one.
+ *
+ * The array was not held because anything needed it. It was held because
+ * `buildUpsert` returned `(xmax = 0) as inserted` and not `id`, so the uuid
+ * of a row just written was unknown and had to be recovered afterwards by
+ * querying the whole id list. Returning one more column is what lets a join
+ * row be written beside its parent, on the same page, and the page be
+ * discarded.
+ *
+ * What survives a page, and must:
+ *
+ *   parentKeys   airtable_record_id → uuid, for tables synced later. Strings;
+ *                about 350 KB for deliverables and under a megabyte for
+ *                anything in phase two.
+ *   counters     the TableResult for the parent and one per join table.
+ *
+ * That is all. Records, plans and join pairs are page-scoped.
+ */
 async function syncTable(
   db: Db,
   runId: string,
@@ -206,7 +232,73 @@ async function syncTable(
   startedAt: number = Date.now()
 ): Promise<TableResult[]> {
   const t = spec(key);
-  const records = await readTable(t.airtable, {
+
+  const result: TableResult = {
+    table: key,
+    readFromAirtable: 0,
+    inserted: 0,
+    updated: 0,
+    unchanged: 0,
+    wouldInsertExisting: 0,
+    unresolvedParents: 0,
+    anomalies: 0,
+    blocked: 0,
+    skipped: 0,
+  };
+
+  // ONCE PER TABLE, BEFORE THE FIRST PAGE, and deliberately not per page.
+  // This check exists to fail before anything is written rather than 200
+  // rows in; running it per page would either repeat the query for every
+  // page or report the same fatal error fifty-six times.
+  const required = await requiredColumns(db, key);
+  const unmapped = required.filter((c) => !columnsFor(t).includes(c));
+  if (unmapped.length) {
+    throw new Error(
+      `${key}: the database requires ${unmapped.join(', ')} but the field map never writes ` +
+        'them; every insert would fail. Map them, give them a default, or make them nullable.'
+    );
+  }
+
+  // Accumulates across pages and is published immediately, because later
+  // tables resolve their links against it. Strings only.
+  const parentKeys = new Map<string, string>();
+  keys.set(key, parentKeys);
+
+  if (opts.joinsOnly) {
+    // The parent is not written, so its uuids come from the mirror — which
+    // is exactly what the upsert would otherwise have supplied.
+    for (const [recordId, uuid] of await loadKeyMap(db, key)) parentKeys.set(recordId, uuid);
+    log(`${key}: joinsOnly — parent not written, ${parentKeys.size} existing keys loaded`);
+  }
+
+  const joins = t.joins ?? [];
+  const joinResults = new Map<string, TableResult>(
+    joins.map((j) => [
+      j.table,
+      {
+        table: j.table,
+        readFromAirtable: 0,
+        inserted: 0,
+        updated: 0,
+        unchanged: 0,
+        wouldInsertExisting: 0,
+        unresolvedParents: 0,
+        anomalies: 0,
+        blocked: 0,
+        skipped: 0,
+      },
+    ])
+  );
+
+  const upsertSql = buildUpsert(t);
+  const joinSql = new Map(joins.map((j) => [j.table, buildJoinUpsert(j)]));
+
+  /** showRecords state, carried across pages so the cap means what it says. */
+  let shownFuzzy = 0;
+  let shownExact = 0;
+  const wanted = new Set(opts.showRecords ?? []);
+
+  const total = await streamTable(t.airtable, {
     apiKey: opts.apiKey,
     baseId: opts.baseId,
     limiter,
@@ -219,181 +311,147 @@ async function syncTable(
           `per record min ${m.perRecordMin}, median ${m.perRecordMedian}, max ${m.perRecordMax}` +
           (m.largestRecordId ? ` (largest: ${m.largestRecordId})` : '')
       ),
-  });
-  log(`${key}: read ${records.length} from ${t.airtable}`);
-
-  const result: TableResult = {
-    table: key,
-    readFromAirtable: records.length,
-    inserted: 0,
-    updated: 0,
-    unchanged: 0,
-    wouldInsertExisting: 0,
-    unresolvedParents: 0,
-    anomalies: 0,
-    blocked: 0,
-    skipped: 0,
-  };
-
-  const issues: { recordId: string; issue: Issue }[] = [];
-  const plans: RowPlan[] = [];
-
-  for (const record of records) {
-    // A record with no id cannot be matched, so an upsert would INSERT it —
-    // every run. This is the nullable-key trap that the unique index does not
-    // catch, and it is counted rather than assumed away.
-    if (!record.id || !/^rec[A-Za-z0-9]{14}$/.test(record.id)) {
-      result.wouldInsertExisting++;
-      issues.push({
-        recordId: record.id ?? '(none)',
-        issue: {
-          kind: 'coercion_failed',
-          field: 'id',
-          airtableValue: record.id ?? null,
-          detail: 'record has no usable Airtable id; it would insert a duplicate on every run and was skipped',
-        },
-      });
-      continue;
+  }, async (page) => {
+    // The budget is consulted per page as well as per table and per join.
+    // A table is now many writes spread over many pages, and the point of
+    // the budget is that the run ends on its own clock and closes itself.
+    if (Date.now() - startedAt > RUN_BUDGET_MS) {
+      throw new Error(
+        `out of time during ${key}; ${Math.round((Date.now() - startedAt) / 1000)}s elapsed ` +
+          `after ${result.readFromAirtable} records. Re-run the same scope: rows already ` +
+          'written are upserts and will be updated, not duplicated.'
+      );
     }
 
-    const plan = planRow(t, record);
-    for (const issue of plan.issues) issues.push({ recordId: record.id, issue });
+    result.readFromAirtable += page.length;
 
-    for (const link of plan.pendingLinks) {
-      const parent = keys.get(link.linkTo as TableKey);
-      const uuid = parent?.get(link.recordId);
-      if (uuid) {
-        plan.values[plan.columns.indexOf(link.column)] = uuid;
-      } else {
-        result.unresolvedParents++;
+    const issues: { recordId: string; issue: Issue }[] = [];
+    const plans: RowPlan[] = [];
+
+    for (const record of page) {
+      // A record with no id cannot be matched, so an upsert would INSERT it —
+      // every run. This is the nullable-key trap that the unique index does not
+      // catch, and it is counted rather than assumed away.
+      if (!record.id || !/^rec[A-Za-z0-9]{14}$/.test(record.id)) {
+        result.wouldInsertExisting++;
         issues.push({
-          recordId: record.id,
+          recordId: record.id ?? '(none)',
           issue: {
-            kind: 'unresolved_link',
-            field: link.column,
-            airtableValue: link.recordId,
+            kind: 'coercion_failed',
+            field: 'id',
+            airtableValue: record.id ?? null,
             detail:
-              `${link.recordId} is not in ${link.linkTo}. The row loaded with ${link.column} null — ` +
-              `usually a record filtered out of the view the sync reads, or deleted in Airtable.`,
+              'record has no usable Airtable id; it would insert a duplicate on every run and was skipped',
           },
         });
+        continue;
+      }
+
+      const plan = planRow(t, record);
+      for (const issue of plan.issues) issues.push({ recordId: record.id, issue });
+
+      for (const link of plan.pendingLinks) {
+        const parent = keys.get(link.linkTo as TableKey);
+        const uuid = parent?.get(link.recordId);
+        if (uuid) {
+          plan.values[plan.columns.indexOf(link.column)] = uuid;
+        } else {
+          result.unresolvedParents++;
+          issues.push({
+            recordId: record.id,
+            issue: {
+              kind: 'unresolved_link',
+              field: link.column,
+              airtableValue: link.recordId,
+              detail:
+                `${link.recordId} is not in ${link.linkTo}. The row loaded with ${link.column} null — ` +
+                `usually a record filtered out of the view the sync reads, or deleted in Airtable.`,
+            },
+          });
+        }
+      }
+      plans.push(plan);
+    }
+
+    // SKIP WHAT THE DATABASE WOULD REFUSE, rather than letting it abort a
+    // batch. A NOT NULL violation raises and rolls back the whole
+    // transaction, so one abandoned record in Airtable stops the load —
+    // which is what it did to client_companies after 200 rows had committed.
+    //
+    // Still after link resolution, because an unresolved link is how
+    // deliverables.project_id becomes null, and that is the case worth
+    // catching rather than a mapping that was never populated.
+    const writable: RowPlan[] = [];
+    for (const plan of plans) {
+      const missing = required.filter((c) => {
+        const at = plan.columns.indexOf(c);
+        return at >= 0 && (plan.values[at] === null || plan.values[at] === undefined);
+      });
+      if (missing.length === 0) {
+        writable.push(plan);
+        continue;
+      }
+      result.skipped++;
+      const known = KNOWN_SKIPS[plan.airtableRecordId];
+      issues.push({
+        recordId: plan.airtableRecordId,
+        issue: {
+          kind: 'coercion_failed',
+          field: missing.join(', '),
+          airtableValue: null,
+          detail:
+            `skipped: ${missing.join(', ')} would be null and the database requires a value. ` +
+            'The record was NOT written, because a NOT NULL violation aborts the whole batch ' +
+            'rather than failing one row.' +
+            (known ? ` ${known}` : ''),
+        },
+      });
+    }
+
+    // Rendered per page, which changes one thing: ids named explicitly are no
+    // longer guaranteed to appear FIRST, because a record on page fifty is
+    // not known until page fifty. They are still guaranteed to APPEAR —
+    // exact matches never count against the cap — and that was the property
+    // worth keeping.
+    if (opts.showRecords?.length) {
+      const byId = new Map(page.filter((r) => r.id).map((r) => [r.id, r]));
+      for (const plan of writable) {
+        const isExact = wanted.has(plan.airtableRecordId);
+        if (!isExact && shownFuzzy >= (opts.showLimit ?? SHOW_LIMIT)) continue;
+        const record = byId.get(plan.airtableRecordId);
+        if (!record || !(isExact || matchesAny(record, opts.showRecords, t))) continue;
+        if (isExact) shownExact++;
+        else shownFuzzy++;
+        const rendered = renderPlan(t, plan, record);
+        samples.push(rendered);
+        for (const line of rendered.split('\n')) log(line);
       }
     }
-    plans.push(plan);
-  }
 
-  // SKIP WHAT THE DATABASE WOULD REFUSE, rather than letting it abort a batch.
-  //
-  // A NOT NULL violation raises. That rolls back the whole 200-row
-  // transaction and fails the run, so one abandoned record in Airtable stops
-  // a load of 18,803 — which is exactly what it did on the first attempt at
-  // client_companies, after 200 rows had already committed.
-  //
-  // Runs AFTER link resolution, because a link that did not resolve is how
-  // deliverables.project_id becomes null, and that is the case worth
-  // catching rather than a mapping that was never populated.
-  const required = await requiredColumns(db, key);
-  const unmapped = required.filter((c) => !columnsFor(t).includes(c));
-  if (unmapped.length) {
-    // Nothing would ever write these, so every row would fail. Said once,
-    // before the first batch, rather than 200 rows into a transaction.
-    throw new Error(
-      `${key}: the database requires ${unmapped.join(', ')} but the field map never writes ` +
-        'them; every insert would fail. Map them, give them a default, or make them nullable.'
-    );
-  }
-
-  const writable: RowPlan[] = [];
-  for (const plan of plans) {
-    const missing = required.filter((c) => {
-      const at = plan.columns.indexOf(c);
-      return at >= 0 && (plan.values[at] === null || plan.values[at] === undefined);
-    });
-    if (missing.length === 0) {
-      writable.push(plan);
-      continue;
-    }
-    result.skipped++;
-    const known = KNOWN_SKIPS[plan.airtableRecordId];
-    issues.push({
-      recordId: plan.airtableRecordId,
-      issue: {
-        kind: 'coercion_failed',
-        field: missing.join(', '),
-        airtableValue: null,
-        detail:
-          `skipped: ${missing.join(', ')} would be null and the database requires a value. ` +
-          'The record was NOT written, because a NOT NULL violation aborts the whole batch ' +
-          'rather than failing one row.' +
-          (known ? ` ${known}` : ''),
-      },
-    });
-  }
-  if (result.skipped) {
-    log(`${key}: skipped ${result.skipped} record(s) the database would have refused`);
-  }
-  plans.length = 0;
-  plans.push(...writable);
-
-  // After link resolution, so a rendered row shows the uuid a link became
-  // rather than the Airtable id it started as. On a dry run that uuid is the
-  // sentinel, which is itself worth seeing.
-  if (opts.showRecords?.length) {
-    const byId = new Map(records.filter((r) => r.id).map((r) => [r.id, r]));
-    // AN ID NAMED EXPLICITLY MUST NOT BE CROWDED OUT BY A TEXT MATCH. The
-    // first version took plans in Airtable order and stopped at the cap, so
-    // asking for one specific record and one loose phrase could return five
-    // of the phrase and not the record — the one thing that was asked for by
-    // name. Exact ids are rendered first, and they do not count against the
-    // cap, because naming five ids is asking for five rows.
-    const wanted = new Set(opts.showRecords);
-    const exact = plans.filter((p) => wanted.has(p.airtableRecordId));
-    const fuzzy = plans.filter((p) => !wanted.has(p.airtableRecordId));
-    let shown = 0;
-    for (const plan of [...exact, ...fuzzy]) {
-      const isExact = wanted.has(plan.airtableRecordId);
-      if (!isExact && shown >= (opts.showLimit ?? SHOW_LIMIT)) break;
-      const record = byId.get(plan.airtableRecordId);
-      if (!record || !(isExact || matchesAny(record, opts.showRecords, t))) continue;
-      if (!isExact) shown++;
-      const rendered = renderPlan(t, plan, record);
-      samples.push(rendered);
-      for (const line of rendered.split('\n')) log(line);
-    }
-    if (shown || exact.length) {
-      log(`${key}: rendered ${exact.length} by id and ${shown} by text match`);
-    }
-  }
-
-  if (opts.joinsOnly) {
-    // The parent is left exactly as it is. Its keys come from the mirror,
-    // which is what the upsert below would otherwise have supplied, so the
-    // join tables resolve against rows an earlier run already wrote.
-    keys.set(key, await loadKeyMap(db, key));
-    log(`${key}: joinsOnly — parent not written, ${keys.get(key)?.size ?? 0} existing keys loaded`);
-  } else if (opts.dryRun) {
-    const existing = await existingKeys(db, key, plans.map((p) => p.airtableRecordId));
-    for (const p of plans) {
-      if (existing.has(p.airtableRecordId)) result.updated++;
-      else result.inserted++;
-    }
-    // Nothing is written, so later tables have no real uuids to resolve
-    // against. Map every id to a sentinel so that "unresolved" keeps meaning
-    // "this parent is missing from Airtable too" rather than "nothing is
-    // loaded yet", which on an empty mirror would be every link.
-    keys.set(key, new Map(plans.map((p) => [p.airtableRecordId, `${DRY}-${p.airtableRecordId}`])));
-    log(`${key}: ${DRY} would insert ${result.inserted}, update ${result.updated}`);
-  } else {
-    const sql = buildUpsert(t);
-    for (let i = 0; i < plans.length; i += BATCH) {
-      const slice = plans.slice(i, i + BATCH);
+    // ---- write the parents for this page, learning their uuids as we go ----
+    if (opts.joinsOnly) {
+      // Nothing to write; parentKeys was filled from the mirror above.
+    } else if (opts.dryRun) {
+      const existing = await existingKeys(db, key, writable.map((p) => p.airtableRecordId));
+      for (const p of writable) {
+        if (existing.has(p.airtableRecordId)) result.updated++;
+        else result.inserted++;
+        // A sentinel, so "unresolved" keeps meaning "this parent is missing
+        // from Airtable too" rather than "nothing is loaded yet".
+        parentKeys.set(p.airtableRecordId, `${DRY}-${p.airtableRecordId}`);
+      }
+    } else {
+      // One transaction per page. A failure rolls back 100 rows rather than
+      // 200, which is strictly better for recovery, and at ~20 rows/sec the
+      // commit count is nowhere near the bottleneck.
       await inTransaction(db, async () => {
-        for (const p of slice) {
-          const res = await db.query(sql, p.values);
+        for (const p of writable) {
+          const res = await db.query(upsertSql, p.values);
           if (!res.rowCount) {
             // The DO UPDATE's WHERE excluded it, or a policy did. Either way
             // the row was not written and nothing errored, which is precisely
-            // the failure mode worth counting.
+            // the failure mode worth counting. No id comes back, so no join
+            // row is written for it either — the same outcome as before.
             result.blocked++;
             issues.push({
               recordId: p.airtableRecordId,
@@ -406,151 +464,117 @@ async function syncTable(
                   `(${t.restrictUpdateTo ?? 'no restriction'}), or a policy refused it`,
               },
             });
-          } else if (res.rows[0]?.inserted) {
-            result.inserted++;
-          } else {
-            result.updated++;
+            continue;
           }
+          const row = res.rows[0] ?? {};
+          if (row.inserted) result.inserted++;
+          else result.updated++;
+          if (row.id) parentKeys.set(p.airtableRecordId, String(row.id));
         }
       });
     }
-    keys.set(key, await existingKeyMap(db, key, plans.map((p) => p.airtableRecordId)));
+
+    // ---- join rows for this page, now that their parents have uuids ----
+    for (const join of joins) {
+      const jr = joinResults.get(join.table)!;
+      const childKeys = keys.get(join.linkTo);
+      const pairs: [string, string][] = [];
+      // Its OWN issues, recorded against the join table. Folding these into
+      // the parent's list would file "this contact is not in contacts" under
+      // `projects`, where nobody looking at the join table would find it.
+      const joinIssues: { recordId: string; issue: Issue }[] = [];
+
+      for (const record of page) {
+        for (const planned of planJoins(t, record)) {
+          if (planned.join.table !== join.table) continue;
+          jr.readFromAirtable += planned.childRecordIds.length;
+
+          const parentUuid = parentKeys.get(planned.parentRecordId);
+          // The parent did not load — already counted against the parent
+          // table, so it is not reported twice here.
+          if (!parentUuid) continue;
+
+          for (const childId of planned.childRecordIds) {
+            const childUuid = childKeys?.get(childId);
+            if (!childUuid) {
+              jr.unresolvedParents++;
+              joinIssues.push({
+                recordId: planned.parentRecordId,
+                issue: {
+                  kind: 'unresolved_link',
+                  field: join.childColumn,
+                  airtableValue: childId,
+                  detail:
+                    `${childId} is not in ${join.linkTo}, so the link from ` +
+                    `${planned.parentRecordId} was not recorded in ${join.table}.`,
+                },
+              });
+              continue;
+            }
+            pairs.push([parentUuid, childUuid]);
+          }
+        }
+      }
+
+      if (opts.dryRun) {
+        jr.inserted += pairs.length;
+      } else if (pairs.length) {
+        await inTransaction(db, async () => {
+          for (const [parentUuid, childUuid] of pairs) {
+            const res = await db.query(joinSql.get(join.table)!, [parentUuid, childUuid]);
+            if (!res.rowCount) jr.blocked++;
+            else if (res.rows[0]?.inserted) jr.inserted++;
+            else jr.updated++;
+          }
+        });
+      }
+
+      if (joinIssues.length) {
+        jr.anomalies += joinIssues.length;
+        await recordAnomalies(db, runId, join.table, joinIssues);
+      }
+    }
+
+    // RECORDED PER PAGE, not once at the end. A run killed mid-table used to
+    // record no anomalies at all for that table, which is how the findings
+    // from one dry run were lost entirely. Per page they are partial for a
+    // killed run, which is a different thing from absent.
+    if (issues.length) {
+      result.anomalies += issues.length;
+      await recordAnomalies(db, runId, key, issues);
+    }
+  });
+
+  log(`${key}: read ${total} from ${t.airtable}`);
+  if (result.skipped) {
+    log(`${key}: skipped ${result.skipped} record(s) the database would have refused`);
+  }
+  if (opts.showRecords?.length && (shownExact || shownFuzzy)) {
+    log(`${key}: rendered ${shownExact} by id and ${shownFuzzy} by text match`);
+  }
+  if (opts.joinsOnly) {
+    // nothing written for the parent
+  } else if (opts.dryRun) {
+    log(`${key}: ${DRY} would insert ${result.inserted}, update ${result.updated}`);
+  } else {
     log(`${key}: inserted ${result.inserted}, updated ${result.updated}, blocked ${result.blocked}`);
   }
+  for (const join of joins) {
+    const jr = joinResults.get(join.table)!;
+    log(
+      opts.dryRun
+        ? `${join.table}: ${DRY} would write ${jr.inserted} links, ${jr.unresolvedParents} unresolved`
+        : `${join.table}: ${jr.inserted} new links, ${jr.updated} re-stamped, ${jr.blocked} blocked`
+    );
+  }
 
-  result.anomalies = issues.length;
-  await recordAnomalies(db, runId, key, issues);
-
-  // Join tables come after the parent, because a join row needs the parent's
-  // uuid and that only exists once the parent has been written (or, in a dry
-  // run, once the sentinel map is in place).
   // On a joinsOnly run the parent was not written, so reporting a row of
   // zeros for it would read as "0 inserted" rather than "not attempted".
   const produced: TableResult[] = opts.joinsOnly ? [] : [result];
-  for (const join of t.joins ?? []) {
-    // Checked here too, not only between tables in LOAD_ORDER. A join table
-    // is thousands of writes and deliverables' two are 5,377 of them, which
-    // is where the 5 October run was killed with the budget never consulted.
-    if (Date.now() - startedAt > RUN_BUDGET_MS) {
-      throw new Error(
-        `out of time before ${join.table}; ${Math.round((Date.now() - startedAt) / 1000)}s elapsed. ` +
-          `Re-run with {"tables":["${key}"],"joinsOnly":true} to finish the join tables without ` +
-          'rewriting the parent.'
-      );
-    }
-    produced.push(await syncJoin(db, runId, t, join, records, keys, opts, log));
-  }
+  for (const join of joins) produced.push(joinResults.get(join.table)!);
   return produced;
 }
 
-/**
- * One multi-valued Airtable link, written as rows in a join table.
- *
- * Reported in sync_run_tables under the join table's own name, so the dry run
- * says "deliverable_project_managers: 412 rows" rather than hiding them
- * inside the deliverables count.
- *
- * Links are added and never removed — see the comment on JoinSpec. A link
- * deleted in Airtable leaves its row here, because the sync holds no DELETE
- * and these tables have no is_active. That is an open question, not an
- * oversight, and it is not quietly answered here.
- */
-async function syncJoin(
-  db: Db,
-  runId: string,
-  parent: TableSpec,
-  join: JoinSpec,
-  records: AirtableRecord[],
-  keys: Map<TableKey, Map<string, string>>,
-  opts: SyncOptions,
-  log: (s: string) => void
-): Promise<TableResult> {
-  const result: TableResult = {
-    table: join.table,
-    readFromAirtable: 0,
-    inserted: 0,
-    updated: 0,
-    unchanged: 0,
-    wouldInsertExisting: 0,
-    unresolvedParents: 0,
-    anomalies: 0,
-    blocked: 0,
-    skipped: 0,
-  };
-
-  const parentKeys = keys.get(parent.key);
-  const childKeys = keys.get(join.linkTo);
-  const issues: { recordId: string; issue: Issue }[] = [];
-  const pairs: [string, string][] = [];
-
-  for (const record of records) {
-    for (const planned of planJoins(parent, record)) {
-      if (planned.join.table !== join.table) continue;
-      result.readFromAirtable += planned.childRecordIds.length;
-
-      const parentUuid = parentKeys?.get(planned.parentRecordId);
-      // The parent itself did not load — already counted and reported against
-      // the parent table, so it is not reported twice here.
-      if (!parentUuid) continue;
-
-      for (const childId of planned.childRecordIds) {
-        const childUuid = childKeys?.get(childId);
-        if (!childUuid) {
-          result.unresolvedParents++;
-          issues.push({
-            recordId: planned.parentRecordId,
-            issue: {
-              kind: 'unresolved_link',
-              field: join.childColumn,
-              airtableValue: childId,
-              detail:
-                `${childId} is not in ${join.linkTo}, so the link from ` +
-                `${planned.parentRecordId} was not recorded in ${join.table}.`,
-            },
-          });
-          continue;
-        }
-        pairs.push([parentUuid, childUuid]);
-      }
-    }
-  }
-
-  if (opts.dryRun) {
-    result.inserted = pairs.length;
-    log(`${join.table}: ${DRY} would write ${pairs.length} links, ${result.unresolvedParents} unresolved`);
-  } else {
-    const sql = buildJoinUpsert(join);
-    for (let i = 0; i < pairs.length; i += BATCH) {
-      const slice = pairs.slice(i, i + BATCH);
-      await inTransaction(db, async () => {
-        for (const [parentUuid, childUuid] of slice) {
-          const res = await db.query(sql, [parentUuid, childUuid]);
-          if (!res.rowCount) result.blocked++;
-          else if (res.rows[0]?.inserted) result.inserted++;
-          else result.updated++;
-        }
-      });
-    }
-    log(`${join.table}: ${result.inserted} new links, ${result.updated} re-stamped, ${result.blocked} blocked`);
-  }
-
-  result.anomalies = issues.length;
-  await recordAnomalies(db, runId, join.table, issues);
-  return result;
-}
-
-/**
- * gross_sf, after the deliverables are in.
- *
- * The project's whole-project area comes from its most recent deliverable's
- * building area. Airtable has one for about 16% of tasks, so most projects
- * will get nothing here and the reader's frame is the real source.
- *
- * WRITTEN ONLY WHERE IT IS NULL. If a value is already there it was put there
- * by the reader, from a document, with evidence — and overwriting it on every
- * sync would undo that work silently, on a schedule. A disagreement is a
- * question for a person, not a write.
- */
 async function deriveGrossSf(db: Db, runId: string, log: (s: string) => void): Promise<void> {
   const latest = `
     select distinct on (d.project_id) d.project_id, d.building_sf
@@ -602,15 +626,6 @@ async function existingKeys(db: Db, table: TableKey, ids: string[]): Promise<Set
     [ids]
   );
   return new Set(res.rows.map((r) => String(r.airtable_record_id)));
-}
-
-async function existingKeyMap(db: Db, table: TableKey, ids: string[]): Promise<Map<string, string>> {
-  if (ids.length === 0) return new Map();
-  const res = await db.query(
-    `select airtable_record_id, id from ${table} where airtable_record_id = any($1::text[])`,
-    [ids]
-  );
-  return new Map(res.rows.map((r) => [String(r.airtable_record_id), String(r.id)]));
 }
 
 /**
