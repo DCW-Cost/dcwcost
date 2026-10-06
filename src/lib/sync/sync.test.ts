@@ -1066,3 +1066,51 @@ test('a measured run totals the bytes it read, not just the records', () => {
   // Only when asked, like the per-page measurement it totals.
   assert.match(src, /if \(opts\.measure\) \{\s*\n\s*log\(\s*\n\s*`\$\{key\}: TOTAL/);
 });
+
+// ------------------------------------------- sizing a table before mapping it
+
+test('measureOnly is parsed as a table name, not a LOAD_ORDER key', () => {
+  // The whole point is sizing a table that has no field map, so it cannot
+  // be validated against LOAD_ORDER — "Time Tracking" is an Airtable table
+  // name and will never be a key.
+  assert.equal(parseSyncRequest({ measureOnly: 'Time Tracking' }).measureOnly, 'Time Tracking');
+  assert.equal(parseSyncRequest({ measureOnly: '  ' }).measureOnly, undefined);
+  assert.equal(parseSyncRequest({}).measureOnly, undefined);
+  assert.equal(parseSyncRequest({ measureOnly: 42 }).measureOnly, undefined);
+});
+
+test('a measuring run writes nothing and syncs nothing', () => {
+  // It must not touch LOAD_ORDER at all. The alternative considered was a
+  // four-of-seventy-four field map for time_entries so a measurement could
+  // run, which would have meant the next full sync loading that table with
+  // most of its columns empty.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const branch = src.slice(src.indexOf('if (opts.measureOnly) {'));
+  const body = branch.slice(0, branch.indexOf('const selected = selectedTables'));
+  assert.ok(!/syncTable\(/.test(body), 'a measuring run must not sync a table');
+  assert.match(body, /return \{ runId, tables: \[\] \}/, 'and reports no table results');
+  // Its run row must never read 'full', or the sweep would act on a run
+  // that read one table and wrote nothing.
+  assert.match(src, /scope, dry_run, notes\) values \(\$1, true, \$2\)/);
+  assert.match(src, /`measure:\$\{table\}`/);
+});
+
+test('the measurement reports a distribution, not just an average', () => {
+  // A mean alone is what made generalising from one page wrong: deliverables
+  // average 54 KB with a 402 KB tail. Three more numbers cost nothing.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('async function measureAirtableTable'));
+  for (const part of ['min ${', 'median ~${', 'max ${', 'avg ${']) {
+    assert.ok(fn.includes(part), `the summary must report ${part}`);
+  }
+  assert.match(fn, /would reach the measured memory ceiling/);
+});
+
+test('the measuring handler keeps no pages', () => {
+  // It can be pointed at a table of any size, which is only true because
+  // the page is measured as it arrives and then dropped.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('async function measureAirtableTable'), src.indexOf('/**\n * The tables to sync'));
+  assert.ok(!/push\(\.\.\.|\.push\(record/.test(fn), 'nothing may accumulate');
+  assert.match(fn, /\(\) => \{\}/, 'the page handler discards');
+});

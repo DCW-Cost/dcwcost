@@ -34,6 +34,11 @@
  *                               the parent rows untouched. For finishing a
  *                               run killed inside a join table, without
  *                               re-upserting thousands of parent rows first.
+ *   { "measureOnly": "Time Tracking", "sampleSize": 100 }
+ *                               read one table by its AIRTABLE name and
+ *                               report what it costs. No field map needed,
+ *                               nothing written, nothing mapped — for
+ *                               sizing a table before committing to it.
  */
 import type { Context } from '@netlify/functions';
 import { withDb } from '../../src/lib/sync/db.ts';
