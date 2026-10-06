@@ -1054,3 +1054,15 @@ test('a join table records its own anomalies, under its own name', () => {
   assert.match(src, /await recordAnomalies\(db, runId, join\.table, joinIssues\)/);
   assert.match(src, /jr\.anomalies \+= joinIssues\.length/);
 });
+
+test('a measured run totals the bytes it read, not just the records', () => {
+  // The per-page line cannot answer the question the measurement exists
+  // for. If memory tracks BYTES rather than RECORDS, time_entries — person,
+  // date, hours, task — extrapolates completely differently from
+  // deliverables' 60 columns, whose pages already range 41–66 KB a record.
+  const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  assert.match(src, /bytesRead \+= m\.bytes/);
+  assert.match(src, /TOTAL \$\{total\} records, \$\{bytesRead\} bytes on the wire/);
+  // Only when asked, like the per-page measurement it totals.
+  assert.match(src, /if \(opts\.measure\) \{\s*\n\s*log\(\s*\n\s*`\$\{key\}: TOTAL/);
+});
