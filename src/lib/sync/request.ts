@@ -39,6 +39,8 @@ export interface ParsedRequest {
   joinsOnly?: boolean;
   /** Log per-page wire size and record-size spread. */
   measure?: boolean;
+  /** Size one Airtable table by name, writing nothing and mapping nothing. */
+  measureOnly?: string;
 }
 
 /** Non-empty strings only, or undefined. Shared by showRecords and tables. */
@@ -79,5 +81,13 @@ export function parseSyncRequest(body: unknown): ParsedRequest {
     // a run that silently writes no parents when a full load was wanted.
     joinsOnly: b.joinsOnly === true,
     measure: b.measure === true,
+    // A table NAME, not a key: the point is to size a table before it has a
+    // field map, so it cannot be validated against LOAD_ORDER. An unknown
+    // name fails at Airtable with a 404 naming the table, which is a clear
+    // enough error for a measurement.
+    measureOnly:
+      typeof b.measureOnly === 'string' && b.measureOnly.trim() !== ''
+        ? b.measureOnly.trim()
+        : undefined,
   };
 }

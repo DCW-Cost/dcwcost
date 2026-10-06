@@ -128,6 +128,22 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
   const started = Date.now();
   const limiter = new RateLimiter();
 
+  if (opts.measureOnly) {
+    const runId = opts.runId ?? (await openMeasureRun(db, opts.measureOnly));
+    log(`run ${runId} measuring ${opts.measureOnly}; nothing will be written`);
+    try {
+      const summary = await measureAirtableTable(opts, limiter, log);
+      await closeRun(db, runId, 'succeeded', summary);
+      log(`run ${runId} succeeded`);
+      return { runId, tables: [] };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await closeRun(db, runId, 'failed', message.slice(0, 2000)).catch(() => {});
+      log(`run ${runId} FAILED: ${message}`);
+      throw err;
+    }
+  }
+
   const selected = selectedTables(opts.tables);
   const skipped = LOAD_ORDER.filter((k) => !selected.includes(k));
 
@@ -666,6 +682,81 @@ async function requiredColumns(db: Db, table: TableKey): Promise<string[]> {
 }
 
 /**
+ * Read one Airtable table and report what it costs, writing nothing.
+ *
+ * Reports a DISTRIBUTION rather than an average. Deliverables average
+ * 54 KB a record with a 402 KB tail, and the mean alone is what made an
+ * earlier generalisation from a single page wrong. Three more numbers cost
+ * nothing to print and are the difference between knowing the shape and
+ * assuming it.
+ */
+async function measureAirtableTable(
+  opts: SyncOptions,
+  limiter: RateLimiter,
+  log: (s: string) => void
+): Promise<string> {
+  let bytes = 0;
+  let pages = 0;
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
+  let largestId: string | null = null;
+  const medians: number[] = [];
+
+  const records = await streamTable(
+    opts.measureOnly!,
+    {
+      apiKey: opts.apiKey,
+      baseId: opts.baseId,
+      limiter,
+      maxRecords: opts.sampleSize,
+      measure: true,
+      onMeasure: (m) => {
+        bytes += m.bytes;
+        pages++;
+        if (m.perRecordMin < min) min = m.perRecordMin;
+        if (m.perRecordMax > max) {
+          max = m.perRecordMax;
+          largestId = m.largestRecordId;
+        }
+        medians.push(m.perRecordMedian);
+        log(
+          `${opts.measureOnly}: PAGE ${m.records} records, ${m.bytes} bytes ` +
+            `(${Math.round(m.bytes / Math.max(m.records, 1))} avg/record); ` +
+            `min ${m.perRecordMin}, median ${m.perRecordMedian}, max ${m.perRecordMax}` +
+            (m.largestRecordId ? ` (largest: ${m.largestRecordId})` : '')
+        );
+      },
+    },
+    // Nothing is kept and nothing is written. The page is measured as it
+    // arrives and then dropped, which is also what makes this safe to point
+    // at a table of any size.
+    () => {}
+  );
+
+  const avg = Math.round(bytes / Math.max(records, 1));
+  const medianOfMedians = medians.length
+    ? [...medians].sort((a, b) => a - b)[Math.floor(medians.length / 2)]
+    : 0;
+
+  // 1,100 MB of wire data is roughly where 210 + 0.74 x MB reaches the
+  // 1,024 MB function limit. Stated as a projection, not a verdict.
+  const PROJECTED_CEILING_MB = 1100;
+  const fitsAt = Math.floor((PROJECTED_CEILING_MB * 1024 * 1024) / Math.max(avg, 1));
+
+  const summary =
+    `measured ${opts.measureOnly}: ${records} records over ${pages} page(s), ` +
+    `${bytes} bytes (${(bytes / 1024 / 1024).toFixed(1)} MB). ` +
+    `Per record: min ${min === Number.POSITIVE_INFINITY ? 0 : min}, ` +
+    `median ~${medianOfMedians}, max ${max}, avg ${avg}` +
+    (largestId ? ` (largest ${largestId})` : '') +
+    `. At this average a full table of about ${fitsAt.toLocaleString('en-US')} records ` +
+    'would reach the measured memory ceiling.';
+
+  log(summary);
+  return summary;
+}
+
+/**
  * The tables to sync, always in LOAD_ORDER.
  *
  * Intersecting rather than using the caller's order is the whole safety of
@@ -687,6 +778,15 @@ async function loadKeyMap(db: Db, table: TableKey): Promise<Map<string, string>>
     `select airtable_record_id, id from ${table} where airtable_record_id is not null`
   );
   return new Map(res.rows.map((r) => [String(r.airtable_record_id), String(r.id)]));
+}
+
+/** Never 'full': the sweep refuses anything else, and this read nothing at all. */
+async function openMeasureRun(db: Db, table: string): Promise<string> {
+  const res = await db.query(
+    `insert into sync_runs (scope, dry_run, notes) values ($1, true, $2) returning id`,
+    [`measure:${table}`.slice(0, 60), `sizing ${table} only; no mapping, no writes`]
+  );
+  return String(res.rows[0].id);
 }
 
 async function openRun(db: Db, dryRun: boolean, selected: readonly TableKey[]): Promise<string> {
