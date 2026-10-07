@@ -1547,3 +1547,109 @@ test('npm test actually runs the tests, on Windows too', () => {
   );
   assert.match(script, /--test\s+"[^"]*\*\.test\.ts"/, 'the glob must be double-quoted');
 });
+
+test('a renamed choice is caught in position three, not just position one', () => {
+  // THE SPECIFIC BLIND SPOT. unknownChoice used to read value[0] only, so a
+  // record holding ["Schedule", "Quote", "Renamed Thing"] was judged on
+  // "Schedule" alone and passed. A test exercising position one would pass
+  // against the broken version too, which is why this one starts at three.
+  const known = ['Schedule', 'Quote', 'Collections'];
+
+  assert.equal(
+    unknownChoice(known, ['Schedule', 'Quote', 'Renamed Thing']),
+    'Renamed Thing',
+    'an unknown value in LAST position must be found'
+  );
+  assert.equal(
+    unknownChoice(known, ['Schedule', 'Renamed Thing', 'Quote']),
+    'Renamed Thing',
+    'an unknown value in the MIDDLE must be found'
+  );
+  assert.equal(unknownChoice(known, ['Renamed Thing', 'Schedule']), 'Renamed Thing');
+
+  // Still correct on the cases it already handled.
+  assert.equal(unknownChoice(known, ['Schedule', 'Quote', 'Collections']), null, 'all known');
+  assert.equal(unknownChoice(known, 'Schedule'), null, 'bare single value');
+  assert.equal(unknownChoice(known, { name: 'Quote' }), null, 'select object');
+  assert.equal(unknownChoice(known, []), null, 'empty list is not an unknown choice');
+  assert.equal(unknownChoice(known, null), null, 'absent is not an unknown choice');
+  assert.equal(unknownChoice(known, ['', '   ']), null, 'blanks are not unknown choices');
+
+  // The first unknown wins, deliberately — one anomaly per record per field.
+  assert.equal(unknownChoice(known, ['Nope', 'Also Nope']), 'Nope', 'first unknown is reported');
+
+  // Trimming applies to every position, not just the first. Airtable's
+  // trailing-space options are real: see out_of_office's Category.
+  assert.equal(unknownChoice(known, ['Schedule', 'Quote ']), null, 'trailing space still matches');
+});
+
+// ===========================================================================
+// project_notes — the table that breaks the link-naming rule legitimately.
+// ===========================================================================
+
+test('project_notes keeps DCW Projects as a project, not a task', () => {
+  // THE DOCUMENTED EXCEPTION. "DCW Projects" here points at New Project
+  // Entry; the identically named field on Time Tracking points at DCW
+  // Project Tasks. Same spelling, same base, different targets — verified
+  // against the live base, not inferred from the name.
+  const f = spec('project_notes').fields.find((x) => x.to === 'project_id');
+  assert.ok(f, 'project_id must be mapped');
+  assert.equal(f.kind, 'link');
+  assert.equal(f.linkTo, 'projects', 'this one really is a project link');
+});
+
+test('project_notes task attachment is a join, because 10% have more than one', () => {
+  const s = spec('project_notes');
+  assert.ok(
+    !s.fields.some((x) => x.to === 'deliverable_id'),
+    '019 dropped deliverable_id; 361 of 3,520 notes attach to several tasks'
+  );
+  const j = s.joins?.find((x) => x.table === 'project_note_deliverables');
+  assert.ok(j, 'tasks must be written to project_note_deliverables');
+  assert.equal(j.from, 'DCW Project Tasks');
+  assert.equal(j.parentColumn, 'project_note_id');
+  assert.equal(j.childColumn, 'deliverable_id');
+  assert.equal(j.linkTo, 'deliverables');
+});
+
+test('the double space in "Added  By" is preserved exactly', () => {
+  // It is the field's real name in Airtable. A single space matches nothing
+  // and added_by_id stays null on all 3,520 rows with no error anywhere.
+  const f = spec('project_notes').fields.find((x) => x.to === 'added_by_id');
+  assert.ok(f, 'added_by_id must be mapped');
+  assert.equal(f.from, 'Added  By');
+  assert.ok(/Added {2}By/.test(f.from), 'exactly two spaces, not one and not three');
+  assert.equal(f.linkTo, 'people');
+});
+
+test('project_notes multi-select choices are listed and every position is guarded', () => {
+  // This is the first text[] field in the mirror to carry a choices list,
+  // which only became safe once unknownChoice stopped reading value[0].
+  const f = spec('project_notes').fields.find((x) => x.to === 'notes_include_info_on');
+  assert.ok(f?.choices, 'the 13 options must be written down');
+  assert.equal(f.kind, 'text[]');
+  assert.equal(f.choices.length, 13);
+  for (const c of f.choices) assert.equal(c, c.trim(), `choice ${JSON.stringify(c)} must be trimmed`);
+
+  // And the guard works past position one on this actual list.
+  assert.equal(unknownChoice(f.choices, ['Schedule', 'Quote', 'Renamed']), 'Renamed');
+  assert.equal(unknownChoice(f.choices, ['Schedule', 'Quote', 'Collections']), null);
+});
+
+test('project_notes takes its created date from metadata, under this table name', () => {
+  // airtable_created_at here, created_on on out_of_office. Checked, not copied.
+  assert.equal(spec('project_notes').createdAtColumn, 'airtable_created_at');
+  assert.equal(
+    spec('project_notes').fields.find((x) => x.to === 'airtable_created_at'),
+    undefined,
+    'it must not also be mapped as a field'
+  );
+});
+
+test('project_notes leaves attachments unmapped and loads after its targets', () => {
+  const s = spec('project_notes');
+  assert.ok(!s.fields.map((f) => f.to).includes('snip_image_paths'), 'attachment URLs expire');
+  assert.ok(LOAD_ORDER.indexOf('projects') < LOAD_ORDER.indexOf('project_notes'));
+  assert.ok(LOAD_ORDER.indexOf('deliverables') < LOAD_ORDER.indexOf('project_notes'));
+  assert.ok(LOAD_ORDER.indexOf('people') < LOAD_ORDER.indexOf('project_notes'));
+});

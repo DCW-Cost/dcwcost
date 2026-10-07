@@ -184,19 +184,40 @@ export function allRecordIds(raw: unknown): string[] {
 }
 
 /**
- * A single-select value the field map did not expect.
+ * A select value the field map did not expect — from anywhere in the value.
  *
  * Renaming a choice in Airtable is a two-second edit with no visible
  * consequence there, and Phase II's "Complete" is what decides whether
  * `completed_at` is ever set. This is how that surfaces as a row in
  * sync_anomalies rather than as a column that quietly stops filling.
  *
+ * EVERY VALUE IS CHECKED, NOT JUST THE FIRST, and that is the whole point of
+ * this version. It used to read `Array.isArray(value) ? value[0] : value`,
+ * which is right for a single select and wrong for a multiple one: a record
+ * holding ["Schedule", "Quote", "Renamed Thing"] was judged on "Schedule"
+ * alone and passed.
+ *
+ * That blind spot is why NO MULTI-VALUE FIELD IN THE MIRROR HAS EVER CARRIED
+ * A CHOICES LIST. There are thirteen of them — sector, market, city,
+ * scope_categories, task_type and the rest — and adding a list to any of them
+ * would have created a guard that reads as covering N options while checking
+ * one. Fixing the mechanism is what makes those thirteen possible.
+ *
+ * THE FIRST UNKNOWN IS RETURNED, not all of them. The anomaly names the field
+ * and the value, which is what somebody acts on; listing every unrecognised
+ * value on one record would be noise, and the second one is found on the next
+ * run after the first is dealt with.
+ *
  * The value is still loaded. Refusing it would lose data over a label.
  */
 export function unknownChoice(known: readonly string[], value: unknown): string | null {
-  const name = selectName(Array.isArray(value) ? value[0] : value);
-  if (name === null) return null;
-  const t = name.trim();
-  if (t === '') return null;
-  return known.some((k) => k.toLowerCase() === t.toLowerCase()) ? null : t;
+  const items = Array.isArray(value) ? value : [value];
+  for (const item of items) {
+    const name = selectName(item);
+    if (name === null) continue;
+    const t = name.trim();
+    if (t === '') continue;
+    if (!known.some((k) => k.toLowerCase() === t.toLowerCase())) return t;
+  }
+  return null;
 }
