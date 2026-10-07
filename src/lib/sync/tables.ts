@@ -448,32 +448,48 @@ export const TABLES: readonly TableSpec[] = [
   },
 
   // ===========================================================================
-  // SECOND STANDING RULE: TAKE LINK CARDINALITY FROM THE SCHEMA, NEVER FROM
-  // A SAMPLE. Any link whose field config says prefersSingleRecordLink:false
-  // gets checked across the FULL population before it becomes a scalar
-  // column — not sampled.
+  // SECOND STANDING RULE: COUNT EVERY LINK ACROSS THE FULL POPULATION BEFORE
+  // IT BECOMES A SCALAR COLUMN. Not a sample, and NOT the schema flag.
   //
-  // out_of_office is why. Six of its 843 records are group events carrying
-  // two or three people, and a single person_id silently kept the first. A
-  // 100-row sample found none of them, and that was the EXPECTED result
-  // rather than bad luck: 6 in 843 means a 100-row sample misses them most
-  // of the time. No sample size anyone would actually reach for finds a
-  // rare-but-structural case reliably.
+  // prefersSingleRecordLink IS A UI PREFERENCE, NOT A CONSTRAINT. It changes
+  // how the Airtable editor behaves. It does not stop anybody putting several
+  // in, and the field's type stays multipleRecordLinks either way:
   //
-  // The schema knew before any data did. "Collaborators" was declared
-  // prefersSingleRecordLink:false, which says Airtable PERMITS several —
-  // and permitted-but-unused is exactly the state that turns into used
-  // without anybody noticing. So the defence is not a bigger sample, it is
-  // reading the config and then counting the whole table.
+  //   Activity Log."DCW Project Task"   prefersSingleRecordLink: TRUE
+  //   records holding more than one:    32
   //
-  // KNOWN TO NEED THIS when their maps are written:
-  //   Activity Log."Logged By"      --> Collaborators   (two separate person
-  //   Activity Log."Action Owner"   --> Collaborators    links on one table)
-  //   Time Tracking."DCW Project Pursuits" --> DCW Project Pursuits
+  // THE FIRST VERSION OF THIS RULE SAID "take cardinality from the schema,
+  // never from a sample", and told you to count only the links marked false.
+  // That was half right and the wrong half was load-bearing: it implied TRUE
+  // meant settled. 021 had to add a join table because of it. The flag is
+  // evidence of nothing in either direction.
   //
-  // Checking is one query against the live table, and it is cheap at any
-  // size. The remaining tables hold 3,479, 3,569, 3,475 and 29,119 records,
-  // so anything learned from 100 of them is a claim about 100.
+  // BOTH HALVES OF THE MISTAKE ARE WORTH KEEPING, because they are different:
+  //
+  //   SAMPLES MISS RARE-BUT-STRUCTURAL CASES. Six of out_of_office's 843
+  //   records are group events carrying two or three people; a 100-row sample
+  //   found none, which was the EXPECTED result rather than bad luck. No
+  //   sample size anyone would reach for finds a 0.7% case reliably.
+  //
+  //   THE SCHEMA FLAG IS NOT A SUBSTITUTE. It looked like the answer to the
+  //   sampling problem — cheap, authoritative, available before any data.
+  //   It is simply not true.
+  //
+  // So: one query, counting the whole table, per link, every time. It is
+  // cheap at any size and it is the only thing that settles the question.
+  //
+  // SCALAR COLUMNS THAT SURVIVED THAT COUNT, with the date, because "safe by
+  // measurement" expires in a way "safe by schema" would not have:
+  //
+  //   activity_log.action_owner_id    0 multiples   2026-10-07
+  //   activity_log.logged_by_id       0 multiples   2026-10-07
+  //   project_notes.project_id        0 multiples   2026-10-07
+  //   project_notes.added_by_id       0 multiples   2026-10-07
+  //   time_entries.pursuit_id         0 of 29,199   2026-10-07
+  //
+  // If any of them gains a second value the sync keeps the first and raises
+  // coercion_failed, which is how both out_of_office and this were found. The
+  // detector works; it just reports after the fact rather than before.
   //
   // ===========================================================================
   // STANDING RULE FOR THIS BASE: A LINK NAMED FOR A PROJECT USUALLY MEANS
@@ -1004,24 +1020,35 @@ export const TABLES: readonly TableSpec[] = [
   {
     key: 'activity_log',
     airtable: 'Activity Log',
+    // A JOIN, AND THE DRY RUN IS WHY. "DCW Project Task" is marked
+    // prefersSingleRecordLink:true, which was taken to mean one task per
+    // entry. 32 records hold several. The flag is a UI preference that
+    // Airtable does not enforce — see the corrected standing rule above and
+    // migration 021, which added this table and dropped deliverable_id.
+    //
+    // Caught before any row was written, which is the whole point of a dry
+    // run over a table that is not loaded yet.
+    joins: [
+      { from: 'DCW Project Task', table: 'activity_log_deliverables',
+        parentColumn: 'activity_log_id', childColumn: 'deliverable_id', linkTo: 'deliverables' },
+    ],
     fields: [
-      // "DCW Project Task" --> DCW Project Tasks. Named for a task and
-      // pointing at one, which is worth stating only because three other
-      // tables in this base are not.
-      { from: 'DCW Project Task', to: 'deliverable_id', kind: 'link', linkTo: 'deliverables' },
       // TWO SEPARATE PERSON LINKS ON ONE TABLE, the first in the mirror, and
-      // they are safe as scalars for DIFFERENT REASONS:
+      // BOTH ARE SAFE FOR THE SAME REASON: counted, and found to hold one.
       //
-      //   "Action Owner"  SINGLE BY SCHEMA — prefersSingleRecordLink:true, so
-      //                   it cannot hold several without a deliberate base
-      //                   change.
-      //   "Logged By"     SINGLE BY TODAY'S DATA ONLY — the config permits
-      //                   several; 3,944 records had exactly one, 409 none,
-      //                   0 multiple when counted across the full population.
+      //   "Action Owner"  0 multiples across the population, 2026-10-07
+      //   "Logged By"     0 multiples; 3,944 with one, 409 with none
       //
-      // The second must not inherit the first's confidence. If "Logged By"
-      // ever holds two, the sync keeps the first and raises coercion_failed —
-      // which is how out_of_office's group events were found.
+      // AN EARLIER VERSION OF THIS COMMENT SAID Action Owner was "single BY
+      // SCHEMA ... cannot hold several without a deliberate base change",
+      // because its config says prefersSingleRecordLink:true. That is wrong:
+      // the flag is a UI preference and Airtable does not enforce it. The
+      // proof is in the same table — "DCW Project Task" is also marked true
+      // and 32 records hold several, which is why 021 made it a join.
+      //
+      // So neither of these is settled, only measured. If either gains a
+      // second value the sync keeps the first and raises coercion_failed,
+      // which is how out_of_office's group events and this were both found.
       { from: 'Logged By', to: 'logged_by_id', kind: 'link', linkTo: 'people' },
       { from: 'Action Owner', to: 'action_owner_id', kind: 'link', linkTo: 'people' },
 
