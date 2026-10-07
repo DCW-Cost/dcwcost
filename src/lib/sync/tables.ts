@@ -43,6 +43,8 @@ export const LOAD_ORDER = [
   'out_of_office',
   // Links to projects AND deliverables (via the join), both above it.
   'project_notes',
+  // Three joins, to client_companies, contacts and people — all above it.
+  'pursuits',
 ] as const;
 
 export type TableKey = (typeof LOAD_ORDER)[number];
@@ -791,6 +793,171 @@ export const TABLES: readonly TableSpec[] = [
     // "Date Created" is a createdTime field — record metadata, not a field.
     // NOTE THE COLUMN NAME: airtable_created_at here, not created_on as on
     // out_of_office. Checked rather than copied.
+    createdAtColumn: 'airtable_created_at',
+  },
+
+  // ===========================================================================
+  // pursuits — 3,491 rows, 52 Airtable fields, three joins, no link columns.
+  //
+  // 019 moved every link to a join table and dropped client_company_id and
+  // client_contact_id, so there is no scalar-vs-join decision left here. The
+  // targets, checked against the live base rather than taken from the names:
+  //
+  //   "Client Company"        -->  Client Company List   -->  client_companies
+  //   "Client Contact (Link)" -->  Contacts              -->  contacts
+  //   "Assignees"             -->  Collaborators         -->  people
+  //   "Time Tracking"         -->  Time Tracking         -->  IGNORED, it is
+  //                                the reverse side of time_entries.pursuit_id
+  //
+  // ===========================================================================
+  // STANDING RULE, FIRST APPLIED HERE: GUARD CLOSED VOCABULARIES, NOT OPEN ONES
+  //
+  // unknownChoice CANNOT TELL A RENAMED OPTION FROM A NEWLY ADDED ONE. Both
+  // arrive as a value it does not recognise. On a list that grows by design,
+  // every addition is therefore a false alarm — and an anomaly that fires for
+  // normal events teaches people to ignore the anomaly table, which costs more
+  // than the detector is worth.
+  //
+  // So a choices list goes on vocabularies that are CLOSED BY DESIGN, where a
+  // rename silently breaks something downstream and nothing else would notice.
+  // Six of this table's twelve select fields qualify; the other six do not:
+  //
+  //   GUARDED       Status (11), Submitting As (2), Ready to Start (4),
+  //                 Select preferred meeting type (3), Request the Following
+  //                 (4), Project Type (7). 31 options in total.
+  //
+  //   NOT GUARDED   Prime Proposal Components (18) — borderline, called open.
+  //                 Unique Rates (24) — one per client rate schedule.
+  //                 Materials Provided (77) — grows with staff; it contains
+  //                 "Andrew's Resume", "Charu's resume" and a bare "katy",
+  //                 which is what a hand-maintained open list looks like.
+  //                 Project Category (170) — building-type taxonomy.
+  //                 Year (6) and Month-Year (72) — see below.
+  //
+  // ON Year AND Month-Year: their options STOP AT 2023, and it is 2026. They
+  // are not growing lists, they are abandoned ones — either nobody fills them
+  // in any more, or pursuits since 2023 leave them blank. Worth checking the
+  // fill rate after the first load: if they ARE still used, somebody logging a
+  // 2026 pursuit has no valid option to pick, which is a different and worse
+  // problem than a stale list.
+  //
+  // ===========================================================================
+  // TWO createdTime FIELDS, BOTH CORRECTLY SKIPPED
+  //
+  // "Date Created" and "Created" are both createdTime and both return the same
+  // instant. Neither is mapped: createdAtColumn reads the record's metadata,
+  // which is the only source carrying the real time rather than a date-only
+  // rendering. Two fields that look like the obvious source for
+  // airtable_created_at are therefore both absent from the map on purpose.
+  // ===========================================================================
+
+  {
+    key: 'pursuits',
+    airtable: 'DCW Project Pursuits',
+    joins: [
+      { from: 'Client Company', table: 'pursuit_client_companies',
+        parentColumn: 'pursuit_id', childColumn: 'client_company_id', linkTo: 'client_companies' },
+      { from: 'Client Contact (Link)', table: 'pursuit_client_contacts',
+        parentColumn: 'pursuit_id', childColumn: 'contact_id', linkTo: 'contacts' },
+      { from: 'Assignees', table: 'pursuit_assignees',
+        parentColumn: 'pursuit_id', childColumn: 'person_id', linkTo: 'people' },
+    ],
+    fields: [
+      { from: 'Title', to: 'title', kind: 'text' },
+      {
+        from: 'Status',
+        to: 'status',
+        kind: 'text',
+        choices: [
+          'RFQs To-Do',
+          'Fee To-Do',
+          'Unconfirmed',
+          'Confirmed Win',
+          'Confirmed Loss',
+          'Win With Other Team',
+          'Client Did Not Pursue',
+          'DCW Did Not Pursue',
+          'Lack of Response - Went W/ Other Team',
+          'Cancelled',
+          'On Hold',
+        ],
+      },
+      { from: 'Project Pursuit Number', to: 'project_pursuit_number', kind: 'text' },
+      { from: 'Fee Proposal #', to: 'fee_proposal', kind: 'text' },
+      { from: 'Box Link', to: 'box_link', kind: 'text' },
+      { from: 'Notes', to: 'notes', kind: 'text' },
+      { from: 'Tailored Language Needed', to: 'tailored_language_needed', kind: 'text' },
+      { from: 'Due Date', to: 'due_date', kind: 'date' },
+      { from: 'Confirmed Win On', to: 'confirmed_win_on', kind: 'date' },
+      { from: 'Date Fee Proposal / Rates Provided', to: 'date_fee_proposal_rates_provided', kind: 'date' },
+      { from: 'Date Marketing Materials Provided', to: 'date_marketing_materials_provided', kind: 'date' },
+      { from: 'Preferred Meeting Date & Time', to: 'preferred_meeting_date_and_time', kind: 'timestamptz' },
+      {
+        from: 'Ready to Start',
+        to: 'ready_to_start',
+        kind: 'text',
+        choices: ['Waiting on Information', 'Ready to Start', 'In Progress', 'Ready for Approval'],
+      },
+      {
+        from: 'Submitting As',
+        to: 'submitting_as',
+        kind: 'text',
+        choices: ['Subconsultant', 'Prime Consultant'],
+      },
+      {
+        from: 'Select preferred meeting type',
+        to: 'select_preferred_meeting_type',
+        kind: 'text[]',
+        choices: ['Virtual Video Call', 'In-person', 'Phone call'],
+      },
+      {
+        from: 'Request the Following',
+        to: 'request_the_following',
+        kind: 'text[]',
+        choices: [
+          'Resume (with project list)',
+          'Firm Profile (includes all certifications)',
+          'Project Examples (with pictures and descriptions)',
+          'Headshot and logo as separate JPEG',
+        ],
+      },
+      {
+        from: 'Project Type',
+        to: 'project_type',
+        kind: 'text[]',
+        choices: [
+          'Addition / Expansion',
+          'Demolition',
+          'Improvements / Upgrades',
+          'New Construction',
+          'Renovation / Remodel',
+          'Repair / Replace',
+          'Sitework / Rework',
+        ],
+      },
+      // DELIBERATELY UNGUARDED — open vocabularies, see the rule above.
+      { from: 'Prime Proposal Components', to: 'prime_proposal_components', kind: 'text[]' },
+      { from: 'Unique Rates', to: 'unique_rates', kind: 'text[]' },
+      { from: 'Materials Provided', to: 'materials_provided', kind: 'text[]' },
+      { from: 'Project Category', to: 'project_category', kind: 'text[]' },
+      { from: 'Year Pursuit was Requested', to: 'year_pursuit_was_requested', kind: 'text' },
+      { from: 'Month-Year Pursuit was Requested', to: 'month_year_pursuit_was_requested', kind: 'text' },
+      { from: 'Your Name', to: 'your_name', kind: 'text' },
+      { from: 'Your Email', to: 'your_email', kind: 'text' },
+      { from: 'Your Company', to: 'your_company', kind: 'text' },
+      { from: 'Your Phone Number', to: 'your_phone_number', kind: 'text' },
+      // THREE ATTACHMENT COLUMNS ARE UNMAPPED, same reason as everywhere else:
+      // Airtable attachment URLs expire after about two hours.
+      //   final_proposal_paths          <- "Final Proposal (PDF)"
+      //   key_indesign_components_paths <- "Key InDesign Components"
+      //   upload_files_paths            <- "Upload Files"
+      //
+      // "Client Company List copy" is a plain text field with no column and no
+      // evident purpose. Left unmapped and flagged rather than guessed at.
+      //
+      // 52 fields: 27 mapped, 1 createdTime below, 3 joins, 3 attachments,
+      // 1 orphan, 17 derived (6 formulas, 9 lookups, 2 createdTime fields).
+    ],
     createdAtColumn: 'airtable_created_at',
   },
 

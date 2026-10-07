@@ -1653,3 +1653,95 @@ test('project_notes leaves attachments unmapped and loads after its targets', ()
   assert.ok(LOAD_ORDER.indexOf('deliverables') < LOAD_ORDER.indexOf('project_notes'));
   assert.ok(LOAD_ORDER.indexOf('people') < LOAD_ORDER.indexOf('project_notes'));
 });
+
+// ===========================================================================
+// pursuits — the first table where the choices answer differs per field.
+// ===========================================================================
+
+test('pursuits resolves all three joins against the tables 019 built', () => {
+  const s = spec('pursuits');
+  const expected: Array<[string, string, string, string]> = [
+    ['Client Company',        'pursuit_client_companies', 'client_company_id', 'client_companies'],
+    ['Client Contact (Link)', 'pursuit_client_contacts',  'contact_id',        'contacts'],
+    ['Assignees',             'pursuit_assignees',        'person_id',         'people'],
+  ];
+  for (const [from, table, child, linkTo] of expected) {
+    const j = s.joins?.find((x) => x.table === table);
+    assert.ok(j, `${table} must be written`);
+    assert.equal(j.from, from);
+    assert.equal(j.parentColumn, 'pursuit_id');
+    assert.equal(j.childColumn, child);
+    assert.equal(j.linkTo, linkTo);
+  }
+  assert.equal(s.joins?.length, 3, 'three joins; "Time Tracking" is the reverse side and is not one');
+  assert.equal(s.fields.filter((f) => f.kind === 'link').length, 0, '019 left no link columns');
+});
+
+test('pursuits guards closed vocabularies and leaves open ones alone', () => {
+  // unknownChoice cannot tell a rename from an addition, so a choices list on
+  // a list that grows by design is a false-alarm generator — and an anomaly
+  // that fires for normal events teaches people to ignore the table.
+  const s = spec('pursuits');
+  const get = (to: string) => s.fields.find((f) => f.to === to);
+
+  const GUARDED: Array<[string, number]> = [
+    ['status', 11],
+    ['submitting_as', 2],
+    ['ready_to_start', 4],
+    ['select_preferred_meeting_type', 3],
+    ['request_the_following', 4],
+    ['project_type', 7],
+  ];
+  for (const [col, n] of GUARDED) {
+    const f = get(col);
+    assert.ok(f?.choices, `${col} is a closed vocabulary and must carry its options`);
+    assert.equal(f.choices.length, n, `${col} should list ${n} options`);
+    for (const c of f.choices) assert.equal(c, c.trim(), `${col}: ${JSON.stringify(c)} must be trimmed`);
+  }
+
+  // Open lists: Year and Month-Year stop at 2023 and it is 2026, so they are
+  // abandoned rather than growing; the rest grow with clients, staff and work.
+  const OPEN = [
+    'prime_proposal_components',
+    'unique_rates',
+    'materials_provided',
+    'project_category',
+    'year_pursuit_was_requested',
+    'month_year_pursuit_was_requested',
+  ];
+  for (const col of OPEN) {
+    const f = get(col);
+    assert.ok(f, `${col} must still be mapped`);
+    assert.equal(f.choices, undefined, `${col} is an open vocabulary; guarding it fires on every addition`);
+  }
+});
+
+test('pursuits skips both createdTime fields and takes the date from metadata', () => {
+  // "Date Created" AND "Created" are both createdTime and both return the
+  // same instant. Mapping either would store a date-only rendering.
+  const s = spec('pursuits');
+  assert.equal(s.createdAtColumn, 'airtable_created_at');
+  for (const name of ['Date Created', 'Created']) {
+    assert.equal(
+      s.fields.find((f) => f.from === name),
+      undefined,
+      `"${name}" is createdTime metadata, not a field to map`
+    );
+  }
+});
+
+test('pursuits leaves its three attachment columns unmapped', () => {
+  const mapped = spec('pursuits').fields.map((f) => f.to);
+  for (const col of ['final_proposal_paths', 'key_indesign_components_paths', 'upload_files_paths']) {
+    assert.ok(!mapped.includes(col), `${col}: Airtable attachment URLs expire in about two hours`);
+  }
+});
+
+test('pursuits loads after the three tables its joins resolve against', () => {
+  for (const parent of ['client_companies', 'contacts', 'people'] as const) {
+    assert.ok(
+      LOAD_ORDER.indexOf(parent) < LOAD_ORDER.indexOf('pursuits'),
+      `${parent} must load before pursuits or its join cannot resolve`
+    );
+  }
+});
