@@ -1522,3 +1522,28 @@ test('every migration can be re-run: no unguarded create policy', () => {
     }
   }
 });
+
+test('npm test actually runs the tests, on Windows too', () => {
+  // THE SCRIPT REPORTED SUCCESS WHILE RUNNING ZERO TESTS, for months.
+  //
+  //   "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
+  //
+  // That works in bash, which strips the single quotes and leaves node a glob
+  // it expands itself. npm on Windows runs scripts through cmd.exe, which does
+  // NOT strip single quotes — node received a literal 'src/**/*.test.ts',
+  // matched nothing, ran nothing, and exited 0. `ℹ tests 0 … ℹ fail 0` reads
+  // as a pass at a glance.
+  //
+  // Double quotes are stripped by both shells, so node glob-expands in each.
+  //
+  // This cost a whole session of running one file by hand while believing the
+  // suite was green. Six other test files were never executed once.
+  const pkg = JSON.parse(readSource(new URL('../../../package.json', import.meta.url)));
+  const script: string = pkg.scripts.test;
+  assert.ok(
+    !script.includes("'"),
+    `the test script must not use single quotes — cmd.exe does not strip them, ` +
+      `so npm test silently matches no files and passes. Got: ${script}`
+  );
+  assert.match(script, /--test\s+"[^"]*\*\.test\.ts"/, 'the glob must be double-quoted');
+});
