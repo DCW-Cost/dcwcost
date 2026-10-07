@@ -1745,3 +1745,78 @@ test('pursuits loads after the three tables its joins resolve against', () => {
     );
   }
 });
+
+// ===========================================================================
+// activity_log — two person links, three guarded-but-empty vocabularies.
+// ===========================================================================
+
+test('activity_log maps its two person links to distinct columns', () => {
+  // The first table in the mirror with two links to the same target. They are
+  // safe as scalars for DIFFERENT reasons: Action Owner is single by schema
+  // (prefersSingleRecordLink:true), Logged By is single by today's data only
+  // (3,944 with one, 409 with none, 0 with several across the population).
+  const s = spec('activity_log');
+  const logged = s.fields.find((f) => f.to === 'logged_by_id');
+  const owner = s.fields.find((f) => f.to === 'action_owner_id');
+  assert.ok(logged && owner, 'both person links must be mapped');
+  assert.equal(logged.from, 'Logged By');
+  assert.equal(owner.from, 'Action Owner');
+  assert.equal(logged.linkTo, 'people');
+  assert.equal(owner.linkTo, 'people');
+  assert.notEqual(logged.to, owner.to, 'two links to people need two columns, not one');
+
+  const task = s.fields.find((f) => f.to === 'deliverable_id');
+  assert.equal(task?.from, 'DCW Project Task');
+  assert.equal(task?.linkTo, 'deliverables');
+  assert.equal(s.joins, undefined, 'activity_log has no multi-value links, so no joins');
+});
+
+test('activity_log guards its three closed vocabularies even though they are empty', () => {
+  // Departure from the pursuits reasoning, and deliberate. These lists are
+  // closed but currently unpopulated — 72 records sampled from both ends of
+  // the table had only Activity Name filled. The instinct was to skip them as
+  // "a detector watching an empty field".
+  //
+  // Supabase eventually becomes the system of record, so these lists are the
+  // SPECIFICATION of what the column may hold, not only a rename detector.
+  // Guarding a closed list costs nothing when nothing populates it.
+  const s = spec('activity_log');
+  const expected: Array<[string, number]> = [
+    ['activity_type', 14],
+    ['source', 7],
+    ['visibility', 4],
+  ];
+  for (const [col, n] of expected) {
+    const f = s.fields.find((x) => x.to === col);
+    assert.ok(f?.choices, `${col} is a closed vocabulary and must carry its options`);
+    assert.equal(f.choices.length, n);
+    for (const c of f.choices) assert.equal(c, c.trim(), `${col}: ${JSON.stringify(c)} must be trimmed`);
+  }
+});
+
+test('activity_log maps previous_value and new_value despite both being empty', () => {
+  // The log records THAT something changed but not what it changed from.
+  // Mapped anyway: whatever replaces the Airtable automation writes here.
+  const mapped = spec('activity_log').fields.map((f) => f.to);
+  assert.ok(mapped.includes('previous_value'));
+  assert.ok(mapped.includes('new_value'));
+});
+
+test('activity_log takes its date from metadata, under a third column name', () => {
+  // date_logged here; airtable_created_at on project_notes and pursuits;
+  // created_on on out_of_office. Three tables, three names.
+  const s = spec('activity_log');
+  assert.equal(s.createdAtColumn, 'date_logged');
+  assert.equal(
+    s.fields.find((f) => f.from === 'Date Logged'),
+    undefined,
+    'Date Logged is createdTime metadata, not a field to map'
+  );
+});
+
+test('activity_log leaves attachments unmapped and loads after its targets', () => {
+  const s = spec('activity_log');
+  assert.ok(!s.fields.map((f) => f.to).includes('attachments_paths'), 'Airtable URLs expire');
+  assert.ok(LOAD_ORDER.indexOf('deliverables') < LOAD_ORDER.indexOf('activity_log'));
+  assert.ok(LOAD_ORDER.indexOf('people') < LOAD_ORDER.indexOf('activity_log'));
+});
