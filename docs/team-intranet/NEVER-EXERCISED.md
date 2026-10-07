@@ -117,6 +117,27 @@ The three habits that produce that:
    actually written.** The grep that declared `value_disagreement` to have no
    emitter searched for the TypeScript spelling; that kind is written as a SQL
    literal. One spelling, confidently reported.
+6. **Validate a check in BOTH directions — known-bad fails, known-good
+   passes.** Habit 1 alone is not enough. The migration-replay guard was run
+   against a deliberately removed `drop` and failed correctly, so it looked
+   proven — but it had never been run against a correctly guarded file
+   written in the repo's own aligned style. It matched `create policy` with
+   a flexible pattern and the paired drop with an exact single-space literal,
+   so this read as missing:
+
+       drop policy if exists project_client_contacts_sync_read      on project_client_contacts;
+
+   **One side loose, the other strict: that does not miss findings, it
+   INVENTS them, and invented findings look like diligence.**
+
+   It reported 48 unguarded statements across four migrations that were all
+   correct, produced a false claim about the repo's history, and three files
+   were edited on the strength of it. The bug was cheap. The cost was the
+   edits and a claim the reader had no way to check without holding the
+   files themselves.
+
+   A check that has only ever fired on the broken case is half-tested. Run
+   it on the good case too — and prefer a good case you did not write.
 
 ## Why this file exists
 
