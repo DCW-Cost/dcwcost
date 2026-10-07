@@ -207,11 +207,26 @@ export async function runSync(db: Db, opts: SyncOptions): Promise<{ runId: strin
       }
     }
 
-    // gross_sf reads deliverables and writes projects, so it means nothing
-    // unless both were in scope.
-    const bothInScope = selected.includes('deliverables') && selected.includes('projects');
-    if (!opts.dryRun && bothInScope) await deriveGrossSf(db, runId, log);
-    else if (!opts.dryRun) log('gross_sf: skipped, needs both projects and deliverables in scope');
+    // THE SYNC NO LONGER DERIVES gross_sf, AND WILL NOT AGAIN. 020 removed
+    // deriveGrossSf and cleared the 355 values it had written.
+    //
+    // It filled projects.gross_sf from the latest deliverable's building_sf.
+    // The reason that is wrong is not the tie-breaking bug it was found
+    // through: building_sf is a property of a DELIVERABLE, and a project can
+    // legitimately carry several. Portland Fire & Rescue has 41,000 for its
+    // Training Facility and 80,500 for its Logistics Facility, both correct,
+    // and no single number is "the project's area". The field is also not
+    // entered consistently in Airtable, so the unambiguous ones inherit that.
+    //
+    // gross_sf now comes from the reader, out of scanned documents. Until
+    // then the column is null, which is the honest state — and it matters
+    // more than a dormant column would, because pass-one.ts hands gross_sf
+    // to the model as a stated project fact while it reads a cost document.
+    // A wrong area steers the read and then looks like corroboration when the
+    // model repeats it back.
+    //
+    // If something here ever wants to fill it again: it should not, unless it
+    // can say WHICH building the number describes.
 
     await closeRun(
       db,
@@ -759,50 +774,6 @@ async function syncTable(
   const produced: TableResult[] = opts.joinsOnly ? [] : [result];
   for (const join of joins) produced.push(joinResults.get(join.table)!);
   return produced;
-}
-
-async function deriveGrossSf(db: Db, runId: string, log: (s: string) => void): Promise<void> {
-  const latest = `
-    select distinct on (d.project_id) d.project_id, d.building_sf
-      from deliverables d
-     where d.project_id is not null and d.building_sf is not null
-       and d.source = 'airtable'
-     order by d.project_id,
-              coalesce(d.due_date, d.issue_date, d.airtable_created_at::date) desc nulls last`;
-
-  const filled = await db.query(
-    `with latest as (${latest})
-     update projects p set gross_sf = l.building_sf, synced_at = now()
-       from latest l
-      where p.id = l.project_id and p.gross_sf is null
-      returning p.id`
-  );
-
-  const disagreed = await db.query(
-    `with latest as (${latest})
-     select p.airtable_record_id, p.gross_sf, l.building_sf
-       from projects p join latest l on l.project_id = p.id
-      where p.gross_sf is not null and p.gross_sf <> l.building_sf`
-  );
-
-  for (const row of disagreed.rows) {
-    await db.query(
-      `insert into sync_anomalies (run_id, table_name, airtable_record_id, kind,
-                                   field_name, airtable_value, postgres_value, detail)
-       values ($1,'projects',$2,'value_disagreement','gross_sf',$3,$4,$5)`,
-      [
-        runId,
-        row.airtable_record_id,
-        String(row.building_sf),
-        String(row.gross_sf),
-        'the latest deliverable\'s building_sf disagrees with the gross_sf already on the project. ' +
-          'Postgres was left alone: the existing value came from a document with evidence behind it. ' +
-          'Worth a gross_area question in reader_questions.',
-      ]
-    );
-  }
-
-  log(`gross_sf: filled ${filled.rowCount ?? 0}, ${disagreed.rowCount ?? 0} disagreements left alone`);
 }
 
 async function existingKeys(db: Db, table: TableKey, ids: string[]): Promise<Set<string>> {
