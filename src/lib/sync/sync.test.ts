@@ -34,6 +34,24 @@ import { readSource } from './read-source.ts';
 
 // ---------------------------------------------------------------- coercion
 
+/**
+ * The body of one function, between its declaration and the next one named.
+ *
+ * NOT src.slice(indexOf(a), indexOf(b)) DIRECTLY, which is what this replaced.
+ * indexOf returns -1 for a boundary that no longer exists, and slice(start, -1)
+ * does not throw — it silently returns almost the whole file. The two callers
+ * below bounded syncTable with `async function deriveGrossSf`, which 020
+ * removed; they would have kept passing while asserting against run.ts in its
+ * entirety. A missing boundary must fail loudly, so this checks both.
+ */
+function sliceFunction(src: string, from: string, to: string): string {
+  const start = src.indexOf(from);
+  assert.notEqual(start, -1, `slice start not found: ${from}`);
+  const end = src.indexOf(to, start);
+  assert.notEqual(end, -1, `slice end not found: ${to} — did the function move or get removed?`);
+  return src.slice(start, end);
+}
+
 test('a select arrives as a bare string or as an object, and both mean the same', () => {
   assert.equal(coerce('text', 'Complete').value, 'Complete');
   assert.equal(coerce('text', { id: 'sel1', name: 'Complete' }).value, 'Complete');
@@ -996,7 +1014,7 @@ test('nothing in syncTable holds the whole table', () => {
   // array because the upsert did not return the uuid it had written. 5,557
   // deliverables is 334 MB of raw JSON, and a run measured 821 MB of 1,024.
   const src = readSource(new URL('./run.ts', import.meta.url));
-  const fn = src.slice(src.indexOf('async function syncTable('), src.indexOf('async function deriveGrossSf'));
+  const fn = sliceFunction(src, 'async function syncTable(', 'async function existingKeys(');
   assert.ok(!/\breadTable\(/.test(fn), 'syncTable must stream, not accumulate');
   assert.match(fn, /await streamTable\(/);
   // The page is the unit of work; a second full pass over records for joins
@@ -1021,7 +1039,7 @@ test('the key map is published before the first page, and grows', () => {
   // Later tables resolve against it while this one is still streaming, so it
   // must be the same Map object throughout rather than replaced at the end.
   const src = readSource(new URL('./run.ts', import.meta.url));
-  const fn = src.slice(src.indexOf('async function syncTable('), src.indexOf('async function deriveGrossSf'));
+  const fn = sliceFunction(src, 'async function syncTable(', 'async function existingKeys(');
   const publish = fn.indexOf('keys.set(key, parentKeys)');
   const stream = fn.indexOf('await streamTable(');
   assert.ok(publish > 0 && publish < stream, 'the map must be published before streaming starts');

@@ -21,6 +21,7 @@ There are three states here, and they are not the same:
 | thing | where | evidence |
 |---|---|---|
 | `vanished` anomaly kind | `sync_anomaly_kind` enum | **0 occurrences** of the string anywhere in `src/` |
+| `value_disagreement` anomaly kind | `sync_anomaly_kind` enum | emitter removed with `deriveGrossSf` in 020 — see below |
 | trigger refusing while a run is live | `src/pages/api/sync/trigger.ts` | no 409 path exists; parked, never built |
 
 A kind in the enum with no emitter reads, to anyone browsing the schema, as a
@@ -37,26 +38,33 @@ the wrong thing. Re-run as `grep "'value_disagreement'"` it has one emitter.
 
 | thing | where | evidence |
 |---|---|---|
-| `value_disagreement` | `run.ts:792`, in `deriveGrossSf` | wired, but see below — it cannot currently fire |
 | run budget, before each table | `run.ts:200` | no run has exceeded `RUN_BUDGET_MS` (13 min); since batching, runs finish in 3–4s |
 | run budget, per page | `run.ts:390` | same |
 
-### A fourth state: wired, runs, and structurally cannot fire
+### value_disagreement, and the fourth state it used to occupy
 
-`value_disagreement` deserves its own note, because it looks like the healthiest
-entry here and is the most misleading.
+Until 2026-10-07 this was wired, inside `deriveGrossSf`. It compared each
+project's `gross_sf` against the latest deliverable's `building_sf` and
+reported conflicts: **355 projects had both values and 0 disagreed**, which
+read as 355 checked and clean.
 
-It compares each project's `gross_sf` against the latest deliverable's
-`building_sf` and reports a conflict. Measured 2026-10-06: **355 projects have
-both values, and 0 disagree.** That reads as 355 projects checked and clean.
+It was a **fourth state, worse than never-fired: wired, running, and
+structurally unable to fire.** All 355 had `gross_sf` filled FROM that same
+`building_sf`, by the same function, ten lines earlier. It compared a value
+against its own source, so 0 was not evidence of agreement — it was
+arithmetic wearing the clothes of coverage.
 
-But all 355 had `gross_sf` FILLED FROM that same `building_sf`, by the same
-function, ten lines earlier. It is comparing a value against its own source. It
-cannot disagree, and 0 is not evidence of agreement — it is arithmetic.
+020 removed `deriveGrossSf` entirely, because `building_sf` is a property of
+a deliverable and a project can legitimately carry several — Portland Fire &
+Rescue has 41,000 for its Training Facility and 80,500 for its Logistics
+Facility, both correct. So the kind is back to **declared, no code**, which is
+recorded here rather than left looking like coverage.
 
-It becomes a real check only when `gross_sf` arrives independently, from the
-reader's documents. Until then "355 checked, 0 problems" is a sentence that
-means nothing, and is worse than an obvious zero because it looks like coverage.
+The enum value is kept deliberately. Its real home is the reader: two
+documents stating different areas for one project is a genuine disagreement
+worth catching, and that is reader work. Re-adding an enum value is also the
+one schema change that cannot be used in the transaction that adds it, so
+leaving it costs nothing.
 
 ### unknown_choice
 

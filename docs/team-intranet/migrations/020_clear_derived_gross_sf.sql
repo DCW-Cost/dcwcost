@@ -1,0 +1,122 @@
+-- ============================================================================
+-- 020 — stop deriving gross_sf from Airtable, and clear what was derived
+--
+-- projects.gross_sf was filled by deriveGrossSf from the latest deliverable's
+-- building_sf. That is being removed, in code and in data, and the value will
+-- come from the reader when documents are scanned instead.
+--
+-- ============================================================================
+-- WHY, AND IT IS NOT THE TIE
+--
+-- The investigation started from an instability: distinct on with no tiebreak
+-- means five projects got whichever row the query plan returned first. The
+-- proposed fix was a tiebreak. That was the wrong fix, and looking at the
+-- actual records is what showed it:
+--
+--   Portland Fire & Rescue   41,000  "Cost Estimate Update - Training Facility"
+--                            80,500  "Cost Estimate Update - Logistics Facility"
+--
+--   SAKATA Seeds             13,275  "Permit Set: Phase II Vista Head House - Pathology Lab"
+--                            26,600  "Permit Set: Phase I Greenhouse"
+--
+-- BOTH NUMBERS ARE CORRECT. They are different buildings. There is no "the
+-- project's gross square footage" for these, so the question the column asks
+-- is malformed, and a tiebreak would have picked one building and presented
+-- it as the project total — making a wrong answer stable, which removes the
+-- only signal that anything was off.
+--
+-- Two others are a different problem entirely: Josephine County Libraries has
+-- "Master Plan" twice with 2,791 and 4,264, and Mechanical Infrastructure
+-- Upgrades has "100% Design Development" twice with 48,958 and 62,908. Same
+-- task name, same date, different area — a duplicate or an unreplaced
+-- revision. And Tribal School has four records, two task names each appearing
+-- twice, with NO due date and NO issue date at all, so nothing in the data
+-- could order them even in principle.
+--
+-- THE GENERAL POINT, which is what decides this: building_sf is a property of
+-- a DELIVERABLE, not of a project. A project can carry several, legitimately.
+-- And the field has not been entered consistently in Airtable, so even the
+-- 350 unambiguous ones inherit that.
+--
+-- ============================================================================
+-- WHY THE EXISTING 355 ARE CLEARED RATHER THAN LEFT
+--
+-- Two reasons, and the second is the one that decided it.
+--
+-- FIRST, THE READER IS HANDED THIS VALUE AS A STATED FACT. pass-one.ts selects
+-- p.gross_sf into the context it gives the model while reading a cost
+-- document. A wrong area does not sit quietly in a column: it steers how the
+-- document is read, and then looks like corroboration when the model repeats
+-- it back. A null is honest. A wrong number is worse than nothing by some
+-- distance.
+--
+-- SECOND, LEFT ALONE THEY WOULD NEVER BE REPLACED. deriveGrossSf filled only
+-- where gross_sf was null. If whatever writes the reader's value follows the
+-- same convention — and fills-where-null is the obvious convention — then
+-- these 355 projects keep an Airtable-derived number forever while appearing
+-- to have a document-sourced one, and nothing in the schema records which is
+-- which.
+--
+-- NOTHING IS LOST. The values are trivially re-derivable from deliverables if
+-- they are ever wanted, and the deliverables themselves are untouched.
+--
+-- SAFE TO CLEAR, CHECKED RATHER THAN ASSUMED:
+--   line_items            0 rows  -> v_observations has 0 rows, so the
+--   v_observations        0 rows     comparables path reads nothing
+--   document_frames       0 rows  -> no reader run has consumed one yet
+--   estimate_briefs.gross_sf       A SEPARATE COLUMN ON A SEPARATE TABLE.
+--                                  builder.ts's size bands and per-SF totals
+--                                  read that one. Unaffected by this.
+-- ============================================================================
+
+update projects set gross_sf = null, synced_at = now() where gross_sf is not null;
+
+-- ============================================================================
+-- value_disagreement GOES BACK TO BEING UNEMITTED, AND THAT IS RECORDED
+--
+-- The only code that ever wrote that anomaly kind was inside deriveGrossSf,
+-- comparing a project's gross_sf against the latest deliverable's building_sf.
+-- Removing the function removes the emitter, so the enum value returns to
+-- "declared, no code" in docs/team-intranet/NEVER-EXERCISED.md.
+--
+-- The enum value is NOT dropped. Its real home is the reader: two documents
+-- stating different areas for one project is a genuine disagreement worth
+-- catching, and that is reader work rather than sync work. Removing and
+-- re-adding an enum value is also the one schema change that cannot be done
+-- inside a transaction, so leaving it costs nothing and removing it would
+-- cost something later.
+--
+-- What matters is that it is recorded as unemitted rather than left looking
+-- like coverage. A kind in the enum with nothing behind it reads, to anyone
+-- browsing the schema, as a case being handled.
+-- ============================================================================
+
+-- ============================================================================
+-- VERIFICATION
+--
+-- Uncomment and run as a second query. Expected values are stated only where
+-- they follow from the statement above rather than from a prediction:
+--
+--   projects with gross_sf           0
+--   projects total                   unchanged from before (1,874 at time of
+--                                    writing; the point is that none were
+--                                    deleted, not the exact number)
+--   deliverables with building_sf    unchanged — the source is untouched
+--   estimate_briefs.gross_sf exists  true   <- the separate column, unharmed
+--   v_observations rows              0      <- was already 0; nothing broke
+--
+-- Run against production before committing, per the standing practice.
+-- ============================================================================
+--
+-- select 'projects with gross_sf' as item,
+--        (select count(gross_sf)::text from projects) as value
+-- union all select 'projects total', (select count(*)::text from projects)
+-- union all select 'deliverables with building_sf (untouched source)',
+--        (select count(building_sf)::text from deliverables)
+-- union all select 'estimate_briefs.gross_sf still exists',
+--        exists (select 1 from information_schema.columns
+--                 where table_schema='public' and table_name='estimate_briefs'
+--                   and column_name='gross_sf')::text
+-- union all select 'v_observations rows', (select count(*)::text from v_observations);
+--
+-- ============================================================================
