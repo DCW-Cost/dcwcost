@@ -45,6 +45,8 @@ export const LOAD_ORDER = [
   'project_notes',
   // Three joins, to client_companies, contacts and people — all above it.
   'pursuits',
+  // Links to deliverables and people, both above it. No joins.
+  'activity_log',
 ] as const;
 
 export type TableKey = (typeof LOAD_ORDER)[number];
@@ -959,6 +961,128 @@ export const TABLES: readonly TableSpec[] = [
       // 1 orphan, 17 derived (6 formulas, 9 lookups, 2 createdTime fields).
     ],
     createdAtColumn: 'airtable_created_at',
+  },
+
+  // ===========================================================================
+  // activity_log — 4,443 rows and climbing, 26 Airtable fields, no joins.
+  //
+  // A CHANGE LOG WRITTEN BY AN AIRTABLE AUTOMATION, added around May 2026. The
+  // oldest record is 2026-05-26 and the table gained roughly 90 rows during
+  // the session that mapped it. 41 records in May, 2,904 in September.
+  //
+  // Every entry is one formatted string in "Activity Name":
+  //
+  //   💳 Invoice #4281, sent on 2026-10-07
+  //   📆 Due date changed to: 2026-10-16
+  //   🗣️ Client correspondence changed to: Waiting on Response
+  //
+  // MOST COLUMNS WILL BE NULL, and that is the source's shape rather than a
+  // mapping failure. Across 72 records sampled from both ends of the table,
+  // only Activity Name was ever populated — Activity Type, Source, Visibility,
+  // Activity Summary, Previous Value and New Value were empty on all of them.
+  // They appear to be fields built for manual entries nobody makes. The real
+  // fill rates belong in the first load's notes, not here; 72 of 4,443 is a
+  // sample, and this project has twice been wrong about what a sample proves.
+  //
+  // THE THREE SELECT FIELDS ARE GUARDED ANYWAY, which is a departure from the
+  // reasoning used on pursuits. There the question was open vs closed; here
+  // the lists are plainly closed but currently unpopulated, and the first
+  // instinct was to skip them as "a detector watching an empty field".
+  //
+  // That was wrong, because SUPABASE IS EVENTUALLY THE SYSTEM OF RECORD and
+  // Airtable gets phased out. These lists are not just something to watch for
+  // renames — they are the specification of what the column may contain, and
+  // whatever replaces the Airtable automation will need them. Guarding a
+  // closed list costs nothing when nothing populates it, and the list is worth
+  // having written down either way.
+  //
+  // previous_value and new_value are mapped despite being empty everywhere,
+  // for the same reason: the log records THAT something changed but not what
+  // it changed from. Whatever fills that in later writes into these columns.
+  // ===========================================================================
+
+  {
+    key: 'activity_log',
+    airtable: 'Activity Log',
+    fields: [
+      // "DCW Project Task" --> DCW Project Tasks. Named for a task and
+      // pointing at one, which is worth stating only because three other
+      // tables in this base are not.
+      { from: 'DCW Project Task', to: 'deliverable_id', kind: 'link', linkTo: 'deliverables' },
+      // TWO SEPARATE PERSON LINKS ON ONE TABLE, the first in the mirror, and
+      // they are safe as scalars for DIFFERENT REASONS:
+      //
+      //   "Action Owner"  SINGLE BY SCHEMA — prefersSingleRecordLink:true, so
+      //                   it cannot hold several without a deliberate base
+      //                   change.
+      //   "Logged By"     SINGLE BY TODAY'S DATA ONLY — the config permits
+      //                   several; 3,944 records had exactly one, 409 none,
+      //                   0 multiple when counted across the full population.
+      //
+      // The second must not inherit the first's confidence. If "Logged By"
+      // ever holds two, the sync keeps the first and raises coercion_failed —
+      // which is how out_of_office's group events were found.
+      { from: 'Logged By', to: 'logged_by_id', kind: 'link', linkTo: 'people' },
+      { from: 'Action Owner', to: 'action_owner_id', kind: 'link', linkTo: 'people' },
+
+      { from: 'Activity Name', to: 'activity_name', kind: 'text' },
+      { from: 'Activity Summary', to: 'activity_summary', kind: 'text' },
+      { from: 'Previous Value', to: 'previous_value', kind: 'text' },
+      { from: 'New Value', to: 'new_value', kind: 'text' },
+      { from: 'Milestone Date', to: 'milestone_date', kind: 'date' },
+      { from: 'Action Due Date', to: 'action_due_date', kind: 'date' },
+
+      { from: 'Action Required?', to: 'action_required', kind: 'boolean' },
+      { from: 'Workload-Relevant?', to: 'workload_relevant', kind: 'boolean' },
+      { from: 'Pinned to Project Detail?', to: 'pinned_to_project_detail', kind: 'boolean' },
+
+      {
+        from: 'Activity Type',
+        to: 'activity_type',
+        kind: 'text',
+        choices: [
+          'Assignment',
+          'Schedule Change',
+          'Documents Received',
+          'Report/Takeoff Started',
+          'QC',
+          'Draft Delivered',
+          'Final Delivered',
+          'Revisions',
+          'Client Follow-Up',
+          'Internal Note',
+          'Billing / Invoice',
+          'Complete',
+          'Blocker',
+          'Support Request',
+        ],
+      },
+      {
+        from: 'Source',
+        to: 'source',
+        kind: 'text',
+        choices: ['Automation', 'Manual', 'Meeting', 'Email', 'Teams', 'Softr Update', 'Airtable Update'],
+      },
+      {
+        from: 'Visibility',
+        to: 'visibility',
+        kind: 'text',
+        choices: ['Internal', 'Leadership', 'Team', 'Admin'],
+      },
+      // attachments_paths: NOT MAPPED. Airtable attachment URLs expire after
+      // about two hours. This one matters more than the others, because the
+      // switch to Supabase means these files need real storage rather than a
+      // link that is dead on arrival — see the note in the memory on the
+      // mirror being transitional.
+      //
+      // "Date Logged" is a createdTime field and feeds date_logged below.
+      //
+      // 26 fields: 15 mapped, 1 createdTime, 1 attachment, 9 lookups.
+    ],
+    // NOTE THE COLUMN NAME: date_logged here. airtable_created_at on
+    // project_notes and pursuits, created_on on out_of_office. Three tables,
+    // three names, checked each time rather than copied.
+    createdAtColumn: 'date_logged',
   },
 
 ];
