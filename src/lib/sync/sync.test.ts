@@ -1838,3 +1838,104 @@ test('activity_log leaves attachments unmapped and loads after its targets', () 
   assert.ok(LOAD_ORDER.indexOf('deliverables') < LOAD_ORDER.indexOf('activity_log'));
   assert.ok(LOAD_ORDER.indexOf('people') < LOAD_ORDER.indexOf('activity_log'));
 });
+
+// ===========================================================================
+// time_entries — the last of phase two, and the table the link-naming rule
+// came from.
+// ===========================================================================
+
+test('time_entries DCW Projects resolves against deliverables, not projects', () => {
+  // THE ORIGINAL INSTANCE. "DCW Projects" here points at DCW Project Tasks;
+  // the identically named field on project_notes points at New Project Entry.
+  // 017 dropped time_entries.project_id over exactly this.
+  const s = spec('time_entries');
+  const f = s.fields.find((x) => x.from === 'DCW Projects');
+  assert.ok(f, 'DCW Projects must be mapped');
+  assert.equal(f.to, 'deliverable_id');
+  assert.equal(f.linkTo, 'deliverables', 'named for projects, points at tasks');
+  assert.ok(
+    !s.fields.some((x) => x.to === 'project_id'),
+    '017 dropped project_id: no Airtable field points at New Project Entry from this table'
+  );
+  // And the contrast, so the two are not conflated.
+  assert.equal(
+    spec('project_notes').fields.find((x) => x.from === 'DCW Projects')?.linkTo,
+    'projects',
+    'the same field name on project_notes genuinely is a project link'
+  );
+});
+
+test('time_entries maps each of the eight tag vocabularies to its own column', () => {
+  // They overlap heavily — "Meeting (Internal)" is in five of them — so a
+  // crossed pair would be invisible in the data. Matched by exact name.
+  const s = spec('time_entries');
+  const pairs: Array<[string, string]> = [
+    ['Admin Tags', 'admin_tags'],
+    ['Billing Tags', 'billing_tags'],
+    ['Cost Planning Tags', 'cost_planning_tags'],
+    ['Education/Training Tags', 'education_training_tags'],
+    ['Innovation Tags', 'innovation_tags'],
+    ['Management Tags', 'management_tags'],
+    ['Marketing Tags', 'marketing_tags'],
+    ['Out of Office Tags', 'out_of_office_tags'],
+  ];
+  for (const [from, to] of pairs) {
+    const f = s.fields.find((x) => x.from === from);
+    assert.ok(f, `${from} must be mapped`);
+    assert.equal(f.to, to, `${from} must land in ${to}, not another tag column`);
+  }
+  const tagCols = pairs.map(([, to]) => to);
+  assert.equal(new Set(tagCols).size, 8, 'eight distinct columns');
+});
+
+test('time_entries guards seven tag lists and leaves Innovation open', () => {
+  const s = spec('time_entries');
+  const get = (to: string) => s.fields.find((x) => x.to === to);
+  for (const col of ['admin_tags', 'billing_tags', 'cost_planning_tags',
+                     'education_training_tags', 'management_tags', 'marketing_tags',
+                     'out_of_office_tags', 'billable_status']) {
+    const f = get(col);
+    assert.ok(f?.choices, `${col} is a closed vocabulary and must carry its options`);
+    for (const c of f.choices) assert.equal(c, c.trim(), `${col}: ${JSON.stringify(c)} must be trimmed`);
+  }
+  // Innovation Tags grows with every tool the company adopts — Vonage,
+  // Calendly, Softr. Guarding it means an anomaly per adoption.
+  assert.equal(get('innovation_tags')?.choices, undefined, 'Innovation Tags is an open list');
+});
+
+test('the four trailing-space options in this base are written trimmed', () => {
+  // unknownChoice trims the incoming value and compares against the list as
+  // given, so a verbatim copy never matches and fires on every record.
+  const te = spec('time_entries');
+  const edu = te.fields.find((f) => f.to === 'education_training_tags');
+  const cost = te.fields.find((f) => f.to === 'cost_planning_tags');
+  assert.ok(edu?.choices?.includes('Personal development'), 'Airtable has "Personal development "');
+  assert.ok(cost?.choices?.includes('QC3'), 'Airtable has "QC3 "');
+  // And they still match the untrimmed value coming from Airtable.
+  assert.equal(unknownChoice(edu.choices, 'Personal development '), null);
+  assert.equal(unknownChoice(cost.choices, 'QC3 '), null);
+
+  const ooo = spec('out_of_office').fields.find((f) => f.to === 'category');
+  assert.ok(ooo?.choices?.includes('In Person Client Meeting/Event'));
+});
+
+test('the Cost Planning separator is listed as a value but is not a category', () => {
+  // "___DONT USE ANY PAST THIS POINT__" is a line somebody drew to deprecate
+  // the entries below it, because deleting a choice blanks it on every record
+  // using it. Listed so a record still carrying it raises no false anomaly.
+  const f = spec('time_entries').fields.find((x) => x.to === 'cost_planning_tags');
+  assert.ok(f?.choices?.includes('___DONT USE ANY PAST THIS POINT__'));
+  const src = readSource(new URL('./tables.ts', import.meta.url));
+  assert.match(src, /Not a category — a line somebody drew/);
+});
+
+test('time_entries leaves the multipleCollaborators field alone', () => {
+  // "Need to Work With.." is NOT a record link. It returns Airtable user
+  // objects, not rec… ids, so a link mapping resolves nothing on every row.
+  const s = spec('time_entries');
+  assert.equal(s.fields.find((f) => f.from === 'Need to Work With..'), undefined);
+  assert.equal(s.createdAtColumn, 'airtable_created_at');
+  for (const parent of ['people', 'deliverables', 'pursuits'] as const) {
+    assert.ok(LOAD_ORDER.indexOf(parent) < LOAD_ORDER.indexOf('time_entries'));
+  }
+});

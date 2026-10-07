@@ -47,6 +47,8 @@ export const LOAD_ORDER = [
   'pursuits',
   // Links to deliverables and people, both above it. No joins.
   'activity_log',
+  // Links to people, deliverables and pursuits — all above it.
+  'time_entries',
 ] as const;
 
 export type TableKey = (typeof LOAD_ORDER)[number];
@@ -1110,6 +1112,248 @@ export const TABLES: readonly TableSpec[] = [
     // project_notes and pursuits, created_on on out_of_office. Three tables,
     // three names, checked each time rather than copied.
     createdAtColumn: 'date_logged',
+  },
+
+  // ===========================================================================
+  // time_entries — 29,199 rows, 74 Airtable fields. The last of phase two and
+  // larger on its own than everything else put together.
+  //
+  // "DCW PROJECTS" POINTS AT DCW PROJECT TASKS, NOT AT PROJECTS. This is the
+  // table that established the standing rule at the top of this file, and
+  // 017 dropped time_entries.project_id over it: there is no link to New
+  // Project Entry here, so a project_id column had nothing to fill it. The
+  // project stays reachable through deliverable_id -> deliverables.project_id.
+  //
+  // Note that Project Notes has an identically named "DCW Projects" field
+  // which GENUINELY points at New Project Entry. Same spelling, same base,
+  // two different targets — which is why the rule is to check the target
+  // every time rather than to learn what the name means.
+  //
+  // THE THREE LINKS ARE MAPPED AS SCALARS PROVISIONALLY. Counting them across
+  // 29,199 records through the API would be 292 pages; the dry run does the
+  // same measurement in one pass, because a multi-valued link raises
+  // coercion_failed "kept the first" on every record that has one. That is
+  // exactly how activity_log's 32 were found. If the dry run reports any, the
+  // offending link becomes a join before the real load — NOT after.
+  //
+  // Do not read the schema flags as an answer. prefersSingleRecordLink is
+  // true on Collaborators and DCW Projects and false on DCW Project Pursuits,
+  // and it means nothing: activity_log's "DCW Project Task" is marked true
+  // and 32 records hold several. See the corrected standing rule above.
+  //
+  // ===========================================================================
+  // EIGHT TAG VOCABULARIES, ONE PER AREA OF WORK
+  //
+  // Admin, Billing, Cost Planning, Education/Training, Innovation, Management,
+  // Marketing and Out of Office each get their own single select and their own
+  // column. They overlap heavily — "Meeting (Internal)" appears in five of
+  // them — so mapping two of these to the wrong column would be invisible in
+  // the data. Matched by exact field name, and guarded.
+  //
+  // SEVEN ARE GUARDED, INNOVATION IS NOT. Innovation Tags is a list of tools
+  // and initiatives — Vonage, Calendly, Softr, Primalogik Set-up, Resume
+  // Builder — and it grows every time the company adopts something. Guarding
+  // an open list means an anomaly per addition, which is the false alarm that
+  // teaches people to ignore the table.
+  //
+  // COST PLANNING TAGS CONTAINS A SEPARATOR, NOT A CATEGORY:
+  // "___DONT USE ANY PAST THIS POINT__". Somebody deprecated the entries below
+  // it by drawing a line rather than deleting them, because deleting a choice
+  // in Airtable would blank it on every record using it. It is listed here as
+  // a known value so a record still carrying it does not raise a false
+  // anomaly — but it is not a work category, and anything reporting on these
+  // tags should exclude it.
+  //
+  // FOUR OPTIONS IN THIS BASE CARRY A TRAILING SPACE, two of them here:
+  //   out_of_office       "In Person Client Meeting/Event "
+  //   Education/Training  "Personal development "
+  //   Cost Planning       "QC3 "
+  //   Innovation          "Process Development Committee (PDC) "   (unguarded)
+  // All are written TRIMMED, because unknownChoice trims the incoming value
+  // and compares against this list as given — a verbatim copy never matches
+  // and raises a false unknown_choice on every record using it.
+  // ===========================================================================
+
+  {
+    key: 'time_entries',
+    airtable: 'Time Tracking',
+    fields: [
+      { from: 'Collaborators', to: 'person_id', kind: 'link', linkTo: 'people' },
+      // Named for projects, points at TASKS. See above and 017.
+      { from: 'DCW Projects', to: 'deliverable_id', kind: 'link', linkTo: 'deliverables' },
+      // 0 of 29,199 entries link a pursuit as of 2026-10-07 — the link exists,
+      // points where its name says, and has never been used. NOT the 017 case:
+      // that column had no source at all, this one has an empty source.
+      { from: 'DCW Project Pursuits', to: 'pursuit_id', kind: 'link', linkTo: 'pursuits' },
+
+      { from: 'Date', to: 'entry_date', kind: 'timestamptz' },
+      { from: 'Duration (Hours)', to: 'duration', kind: 'numeric' },
+      { from: 'Notes', to: 'notes', kind: 'text' },
+      { from: 'Date Revised (Time Tracking)', to: 'airtable_revised_at', kind: 'timestamptz' },
+
+      {
+        from: 'Billable Status',
+        to: 'billable_status',
+        kind: 'text',
+        choices: ['Billable', 'Non-Billable', "Don't Know"],
+      },
+      {
+        from: 'Admin Tags',
+        to: 'admin_tags',
+        kind: 'text',
+        choices: [
+          'Admin',
+          'Meeting (External - Client)',
+          'Meeting (Internal)',
+          'Communication w/ Client (Phone or Email)',
+          'New Fee Proposal',
+          'Update / Add Service Fee Proposal',
+          'AirTable Database Upkeep',
+          'Troubleshooting / Technical Support',
+          '360 Review',
+          'Research',
+          'Email Management / Organization',
+        ],
+      },
+      {
+        from: 'Billing Tags',
+        to: 'billing_tags',
+        kind: 'text',
+        choices: [
+          'Invoicing',
+          'Projections',
+          'Communication w/ Client (Phone or Email)',
+          'Workbook Updating',
+          'Meeting (External - Client)',
+          'Meeting (Internal)',
+          'Invoice Troubleshooting',
+          'Confirming AT Data',
+          'Recording Checks',
+          'Tracking Invoice Instructions',
+        ],
+      },
+      {
+        from: 'Cost Planning Tags',
+        to: 'cost_planning_tags',
+        kind: 'text',
+        choices: [
+          'Project Prep (Information Review)',
+          'Report Development',
+          'Takeoff',
+          'Quality Control',
+          'Meeting (External - Client)',
+          'Meeting (Internal)',
+          'Client Management',
+          'Report Revisions / Redlines',
+          'Reconciliation',
+          'Scheduling',
+          'Admin / Nonbillable',
+          'Fee Proposal',
+          'Other',
+          // Not a category — a line somebody drew. See the note above.
+          '___DONT USE ANY PAST THIS POINT__',
+          'NTP Received (Update Box + AT)',
+          'Communication w/ Client (Phone or Email)',
+          'Project Organization & Set-up',
+          'QC1 / Report Set-up',
+          'Research / Vendor Outreach',
+          'QC3', // Airtable has a trailing space here.
+          'Added Data to Cost Database',
+          'Meeting (Monday Meeting)',
+          'Meeting Prep',
+          'Travel Time',
+          'Project Time Sheets',
+          'Kabitz',
+          'VE',
+          'New Fee Proposal',
+        ],
+      },
+      {
+        from: 'Education/Training Tags',
+        to: 'education_training_tags',
+        kind: 'text',
+        choices: [
+          'Shadowing / receiving on the job training',
+          'Courses / classes',
+          'Webinar / presentation',
+          'Friday Training',
+          'Personal development', // Airtable has a trailing space here.
+          'Training',
+        ],
+      },
+      {
+        from: 'Management Tags',
+        to: 'management_tags',
+        kind: 'text',
+        choices: [
+          'Meeting (External - Client)',
+          'Meeting (Internal)',
+          'Providing Employee Training',
+          'Project Oversight',
+          'Project Management',
+          'Hiring',
+          'Company Meeting Prep',
+          'Admin',
+        ],
+      },
+      {
+        from: 'Marketing Tags',
+        to: 'marketing_tags',
+        kind: 'text',
+        choices: [
+          'Meeting (External - Client)',
+          'Meeting (Internal)',
+          'Meeting Prep',
+          'Business Development',
+          'Resume Development (RFQ Pursuit - Subconsultant)',
+          'Prime RFQ Work',
+          'Communication w/ Client (Phone or Email)',
+          'Social Media (Linkedin)',
+          'Research',
+          'Travel Time',
+          'Website',
+          'Design Project',
+          'Admin',
+        ],
+      },
+      {
+        from: 'Out of Office Tags',
+        to: 'out_of_office_tags',
+        kind: 'text',
+        choices: [
+          'PTO',
+          'Available as Needed',
+          'Appointment',
+          'DCW Lunch/Event',
+          'DCW Vacation/Holiday',
+          'Volunteer',
+          'Early Dismissal from DCW',
+          'Bereavement',
+          'Site Visit',
+        ],
+      },
+      // DELIBERATELY UNGUARDED — an open list of tools and initiatives that
+      // grows whenever the company adopts something new.
+      { from: 'Innovation Tags', to: 'innovation_tags', kind: 'text' },
+
+      // NOT MAPPED, no column exists for any of them:
+      //   "To Do or Done?"      a workflow state for the entry
+      //   "Priority"            eight values from "Do first today" downwards
+      //   "Instructions"        rich text
+      //   "Need to Work With.." A multipleCollaborators FIELD, which is NOT a
+      //                         record link: it returns Airtable user objects
+      //                         {id, email, name}, not rec… ids into
+      //                         Collaborators. Mapped as a link it would
+      //                         resolve nothing on every row; mapped as text
+      //                         it would store a JSON blob. It needs its own
+      //                         decision, and it sits in the largest table in
+      //                         the base where it is easiest to miss.
+      //
+      // 74 fields: 16 mapped, 1 createdTime below, 4 unmapped above, and 53
+      // lookups and formulas — this table carries a lookup for nearly every
+      // column of the task it points at.
+    ],
+    createdAtColumn: 'airtable_created_at',
   },
 
 ];
