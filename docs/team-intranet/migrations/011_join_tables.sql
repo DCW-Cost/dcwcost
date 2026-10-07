@@ -251,30 +251,19 @@ drop policy if exists project_client_contacts_sync_read      on project_client_c
 drop policy if exists project_client_contacts_sync_ins       on project_client_contacts;
 drop policy if exists project_client_contacts_sync_upd       on project_client_contacts;
 
-drop policy if exists deliverable_project_managers_read on deliverable_project_managers;
 create policy deliverable_project_managers_read      on deliverable_project_managers for select to authenticated using (is_active_user());
 create policy deliverable_project_managers_sync_read on deliverable_project_managers for select to airtable_sync using (true);
-drop policy if exists deliverable_project_managers_sync_ins on deliverable_project_managers;
 create policy deliverable_project_managers_sync_ins  on deliverable_project_managers for insert to airtable_sync with check (true);
-drop policy if exists deliverable_project_managers_sync_upd on deliverable_project_managers;
 create policy deliverable_project_managers_sync_upd  on deliverable_project_managers for update to airtable_sync using (true) with check (true);
 
-drop policy if exists deliverable_project_support_read on deliverable_project_support;
 create policy deliverable_project_support_read       on deliverable_project_support for select to authenticated using (is_active_user());
-drop policy if exists deliverable_project_support_sync_read on deliverable_project_support;
 create policy deliverable_project_support_sync_read  on deliverable_project_support for select to airtable_sync using (true);
-drop policy if exists deliverable_project_support_sync_ins on deliverable_project_support;
 create policy deliverable_project_support_sync_ins   on deliverable_project_support for insert to airtable_sync with check (true);
-drop policy if exists deliverable_project_support_sync_upd on deliverable_project_support;
 create policy deliverable_project_support_sync_upd   on deliverable_project_support for update to airtable_sync using (true) with check (true);
 
-drop policy if exists project_client_contacts_read on project_client_contacts;
 create policy project_client_contacts_read           on project_client_contacts for select to authenticated using (is_active_user());
-drop policy if exists project_client_contacts_sync_read on project_client_contacts;
 create policy project_client_contacts_sync_read      on project_client_contacts for select to airtable_sync using (true);
-drop policy if exists project_client_contacts_sync_ins on project_client_contacts;
 create policy project_client_contacts_sync_ins       on project_client_contacts for insert to airtable_sync with check (true);
-drop policy if exists project_client_contacts_sync_upd on project_client_contacts;
 create policy project_client_contacts_sync_upd       on project_client_contacts for update to airtable_sync using (true) with check (true);
 
 

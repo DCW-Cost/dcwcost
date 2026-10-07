@@ -914,32 +914,19 @@ drop policy if exists subconsultant_invoices_read     on subconsultant_invoices;
 drop policy if exists deliverable_subconsultants_read on deliverable_subconsultants;
 drop policy if exists deliverable_assignees_read      on deliverable_assignees;
 
-drop policy if exists people_read on people;
 create policy people_read                     on people                     for select to authenticated using (is_active_user());
-drop policy if exists client_companies_read on client_companies;
 create policy client_companies_read           on client_companies           for select to authenticated using (is_active_user());
-drop policy if exists subconsultants_read on subconsultants;
 create policy subconsultants_read             on subconsultants             for select to authenticated using (is_active_user());
-drop policy if exists contacts_read on contacts;
 create policy contacts_read                   on contacts                   for select to authenticated using (is_active_user());
-drop policy if exists pursuits_read on pursuits;
 create policy pursuits_read                   on pursuits                   for select to authenticated using (is_active_user());
-drop policy if exists project_notes_read on project_notes;
 create policy project_notes_read              on project_notes              for select to authenticated using (is_active_user());
-drop policy if exists time_entries_read on time_entries;
 create policy time_entries_read               on time_entries               for select to authenticated using (is_active_user());
-drop policy if exists activity_log_read on activity_log;
 create policy activity_log_read               on activity_log               for select to authenticated using (is_active_user());
-drop policy if exists bid_results_read on bid_results;
 create policy bid_results_read                on bid_results                for select to authenticated using (is_active_user());
-drop policy if exists out_of_office_read on out_of_office;
 create policy out_of_office_read              on out_of_office              for select to authenticated using (is_active_user());
-drop policy if exists subconsultant_tasks_read on subconsultant_tasks;
 create policy subconsultant_tasks_read        on subconsultant_tasks        for select to authenticated using (is_active_user());
-drop policy if exists subconsultant_invoices_read on subconsultant_invoices;
 create policy subconsultant_invoices_read     on subconsultant_invoices     for select to authenticated using (is_active_user());
 create policy deliverable_subconsultants_read on deliverable_subconsultants for select to authenticated using (is_active_user());
-drop policy if exists deliverable_assignees_read on deliverable_assignees;
 create policy deliverable_assignees_read      on deliverable_assignees      for select to authenticated using (is_active_user());
 
 -- No INSERT, UPDATE or DELETE policy anywhere above, on purpose. Rule 1 of the

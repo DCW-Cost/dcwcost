@@ -313,12 +313,9 @@ drop policy if exists project_client_companies_sync_read on project_client_compa
 drop policy if exists project_client_companies_sync_ins  on project_client_companies;
 drop policy if exists project_client_companies_sync_upd  on project_client_companies;
 
-drop policy if exists project_client_companies_read on project_client_companies;
 create policy project_client_companies_read      on project_client_companies for select to authenticated using (is_active_user());
 create policy project_client_companies_sync_read on project_client_companies for select to airtable_sync using (true);
-drop policy if exists project_client_companies_sync_ins on project_client_companies;
 create policy project_client_companies_sync_ins  on project_client_companies for insert to airtable_sync with check (true);
-drop policy if exists project_client_companies_sync_upd on project_client_companies;
 create policy project_client_companies_sync_upd  on project_client_companies for update to airtable_sync using (true) with check (true);
 
 
