@@ -1466,11 +1466,20 @@ test('the cardinality rule is written down where the next maps get written', () 
   // This guard exists so the rule survives in the file the next four maps
   // are written into, not only in a commit message.
   const src = readSource(new URL('./tables.ts', import.meta.url));
-  assert.match(src, /TAKE LINK CARDINALITY FROM THE SCHEMA, NEVER FROM\s*\n\s*\/\/ A SAMPLE/);
-  assert.match(src, /prefersSingleRecordLink:false/);
-  // And the tables already known to need it, so nobody re-derives the list.
-  assert.match(src, /Activity Log\."Logged By"/);
-  assert.match(src, /Activity Log\."Action Owner"/);
+  assert.match(src, /COUNT EVERY LINK ACROSS THE FULL POPULATION/);
+  // The load-bearing half is the correction: the schema flag is NOT a
+  // shortcut. The first version of this rule said to count only the links
+  // marked false, which implied true meant settled. 32 activity_log records
+  // proved otherwise and 021 had to add a join table.
+  assert.match(src, /prefersSingleRecordLink IS A UI PREFERENCE, NOT A CONSTRAINT/);
+  assert.ok(
+    !/TAKE LINK CARDINALITY FROM THE SCHEMA/.test(src),
+    'the superseded rule must not survive anywhere in the file'
+  );
+  // The scalar columns that passed the count, each with its date — "safe by
+  // measurement" expires in a way "safe by schema" would not have.
+  assert.match(src, /activity_log\.action_owner_id\s+0 multiples/);
+  assert.match(src, /project_notes\.project_id\s+0 multiples/);
 });
 
 test('every migration can be re-run: no unguarded create policy', () => {
@@ -1765,10 +1774,19 @@ test('activity_log maps its two person links to distinct columns', () => {
   assert.equal(owner.linkTo, 'people');
   assert.notEqual(logged.to, owner.to, 'two links to people need two columns, not one');
 
-  const task = s.fields.find((f) => f.to === 'deliverable_id');
-  assert.equal(task?.from, 'DCW Project Task');
-  assert.equal(task?.linkTo, 'deliverables');
-  assert.equal(s.joins, undefined, 'activity_log has no multi-value links, so no joins');
+  // The task attachment is a JOIN, not a column. "DCW Project Task" is
+  // marked prefersSingleRecordLink:true and 32 records hold several anyway.
+  assert.ok(
+    !s.fields.some((f) => f.to === 'deliverable_id'),
+    '021 dropped deliverable_id; the flag suggesting one task per entry is not enforced'
+  );
+  const task = s.joins?.find((j) => j.table === 'activity_log_deliverables');
+  assert.ok(task, 'tasks must be written to activity_log_deliverables');
+  assert.equal(task.from, 'DCW Project Task');
+  assert.equal(task.parentColumn, 'activity_log_id');
+  assert.equal(task.childColumn, 'deliverable_id');
+  assert.equal(task.linkTo, 'deliverables');
+  assert.equal(s.joins?.length, 1, 'one join; the two person links stay scalar');
 });
 
 test('activity_log guards its three closed vocabularies even though they are empty', () => {

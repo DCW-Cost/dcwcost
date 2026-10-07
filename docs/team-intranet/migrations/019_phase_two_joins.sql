@@ -31,10 +31,16 @@
 -- SCALAR IS SAFE — these three stay columns, FOR THREE DIFFERENT REASONS,
 -- and the differences matter more than the shared conclusion:
 --
---   activity_log.action_owner_id   SINGLE BY SCHEMA. Airtable's field config
---                                  says prefersSingleRecordLink:true, so it
---                                  cannot become multiple without somebody
---                                  deliberately changing the base.
+--   activity_log.action_owner_id   0 MULTIPLES, COUNTED. This originally read
+--                                  "single BY SCHEMA ... cannot become
+--                                  multiple without somebody deliberately
+--                                  changing the base", because the config says
+--                                  prefersSingleRecordLink:true. THAT IS
+--                                  WRONG — the flag is a UI preference and
+--                                  Airtable does not enforce it. See 021:
+--                                  "DCW Project Task" on the same table is
+--                                  also marked true and 32 records hold
+--                                  several. Safe by measurement, not schema.
 --
 --   activity_log.logged_by_id      SINGLE BY TODAY'S DATA ONLY. The config
 --                                  says false — Airtable permits several —
@@ -46,11 +52,11 @@
 --   time_entries.pursuit_id        PERMITS MULTIPLE AND IS ENTIRELY UNUSED:
 --                                  0 of 29,199 time entries link any pursuit.
 --
--- THE SECOND ONE MUST NOT INHERIT THE FIRST ONE'S CONFIDENCE. "Both are safe"
--- was the first version of this analysis and it flattened exactly the
--- distinction that decides how long each stays true. A column that is single
--- by schema is settled; a column that is single by data is a measurement with
--- a date on it.
+-- EVERY ONE OF THESE IS A MEASUREMENT WITH A DATE ON IT, not a guarantee.
+-- The first version of this analysis said "both are safe"; the second drew a
+-- distinction between single-by-schema and single-by-data and called the
+-- former settled. Neither was right. There is no single-by-schema for an
+-- Airtable link — the flag that appears to provide it does not.
 --
 -- WHY SCALAR IS ACCEPTABLE FOR THE SECOND AND THIRD: a scalar column here is
 -- NOT SILENT. When out_of_office hit this exact case the sync raised
