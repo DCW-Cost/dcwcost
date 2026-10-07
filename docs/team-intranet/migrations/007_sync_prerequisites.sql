@@ -593,10 +593,13 @@ drop policy if exists sync_anomalies_resolve     on sync_anomalies;
 
 create policy sync_anomalies_sync_insert on sync_anomalies
   for insert to airtable_sync with check (true);
+drop policy if exists sync_anomalies_sync_read on sync_anomalies;
 create policy sync_anomalies_sync_read on sync_anomalies
   for select to airtable_sync using (true);
+drop policy if exists sync_anomalies_read on sync_anomalies;
 create policy sync_anomalies_read on sync_anomalies
   for select to authenticated using (is_active_user());
+drop policy if exists sync_anomalies_resolve on sync_anomalies;
 create policy sync_anomalies_resolve on sync_anomalies
   for update to authenticated using (is_admin()) with check (is_admin());
 
@@ -834,14 +837,20 @@ drop policy if exists sync_run_tables_sync_insert on sync_run_tables;
 drop policy if exists sync_run_tables_sync_update on sync_run_tables;
 drop policy if exists sync_run_tables_read        on sync_run_tables;
 
+drop policy if exists sync_runs_sync_read on sync_runs;
 create policy sync_runs_sync_read   on sync_runs for select to airtable_sync using (true);
+drop policy if exists sync_runs_sync_insert on sync_runs;
 create policy sync_runs_sync_insert on sync_runs for insert to airtable_sync with check (true);
+drop policy if exists sync_runs_sync_update on sync_runs;
 create policy sync_runs_sync_update on sync_runs for update to airtable_sync using (true) with check (true);
+drop policy if exists sync_runs_read on sync_runs;
 create policy sync_runs_read        on sync_runs for select to authenticated using (is_active_user());
 
+drop policy if exists sync_run_tables_sync_read on sync_run_tables;
 create policy sync_run_tables_sync_read   on sync_run_tables for select to airtable_sync using (true);
 create policy sync_run_tables_sync_insert on sync_run_tables for insert to airtable_sync with check (true);
 create policy sync_run_tables_sync_update on sync_run_tables for update to airtable_sync using (true) with check (true);
+drop policy if exists sync_run_tables_read on sync_run_tables;
 create policy sync_run_tables_read        on sync_run_tables for select to authenticated using (is_active_user());
 
 revoke all on sync_runs, sync_run_tables from anon;

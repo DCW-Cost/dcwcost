@@ -73,12 +73,16 @@ grant update (out_of_office_id, person_id, synced_at) on out_of_office_people to
 
 alter table out_of_office_people enable row level security;
 
+drop policy if exists out_of_office_people_read on out_of_office_people;
 create policy out_of_office_people_read on out_of_office_people
   for select to authenticated using (true);
+drop policy if exists out_of_office_people_sync_ins on out_of_office_people;
 create policy out_of_office_people_sync_ins on out_of_office_people
   for insert to airtable_sync with check (true);
+drop policy if exists out_of_office_people_sync_read on out_of_office_people;
 create policy out_of_office_people_sync_read on out_of_office_people
   for select to airtable_sync using (true);
+drop policy if exists out_of_office_people_sync_upd on out_of_office_people;
 create policy out_of_office_people_sync_upd on out_of_office_people
   for update to airtable_sync using (true) with check (true);
 

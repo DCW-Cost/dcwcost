@@ -13,6 +13,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
 import { allRecordIds, coerce, unknownChoice } from './coerce.ts';
 import {
   buildBatchUpsert,
@@ -1452,4 +1453,46 @@ test('the cardinality rule is written down where the next maps get written', () 
   // And the tables already known to need it, so nobody re-derives the list.
   assert.match(src, /Activity Log\."Logged By"/);
   assert.match(src, /Activity Log\."Action Owner"/);
+});
+
+test('every migration can be re-run: no unguarded create policy', () => {
+  // Postgres has no `create policy if not exists`, so an unguarded create is
+  // correct exactly once and aborts every statement after it on a second
+  // paste. 019 shipped with 16 creates and 0 drops and was caught by a
+  // replay; this guard is so the next one is caught before that.
+  //
+  // Same class as 007's unguarded rename. The house pattern since 004 is
+  // `drop policy if exists X on T;` immediately before `create policy X on T`.
+  const dir = new URL('../../../docs/team-intranet/migrations/', import.meta.url);
+  // 001 and 003 PREDATE THE PRACTICE, which 004 introduced, and they are
+  // named here rather than skipped by a date rule so the exclusion is a
+  // recorded decision instead of a silent gap. Both are long applied; whether
+  // to retrofit them is a separate call. Everything from 004 on is covered.
+  const PREDATES_THE_PRACTICE = ['001_wishlist_and_uploads.sql', '003_deliverable_writes.sql'];
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => !PREDATES_THE_PRACTICE.includes(f));
+  assert.ok(files.length > 10, 'migrations directory should not be empty');
+
+  for (const file of files) {
+    const body = readSource(new URL(file, dir))
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('--'))
+      .join('\n');
+
+    // [\w.]+ for schema-qualified targets like storage.objects, and \s+ rather
+    // than a newline so single-line `create policy X on Y for insert ...` is
+    // matched too. The first version of this regex missed both and reported
+    // three policies as unguarded that it had simply failed to guard.
+    const creates = [...body.matchAll(/create policy (\w+)\s+on\s+([\w.]+)/g)];
+    for (const m of creates) {
+      const [name, table] = [m[1], m[2]];
+      const guard = `drop policy if exists ${name} on ${table};`;
+      assert.ok(
+        body.includes(guard),
+        `${file}: "create policy ${name} on ${table}" has no "${guard}" — ` +
+          'the migration will fail on a second run and abort everything after it'
+      );
+    }
+  }
 });
