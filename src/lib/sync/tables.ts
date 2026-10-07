@@ -41,6 +41,8 @@ export const LOAD_ORDER = [
   'bid_results',
   // Links only to people, which is first, so anywhere after that is safe.
   'out_of_office',
+  // Links to projects AND deliverables (via the join), both above it.
+  'project_notes',
 ] as const;
 
 export type TableKey = (typeof LOAD_ORDER)[number];
@@ -703,6 +705,93 @@ export const TABLES: readonly TableSpec[] = [
     // "Created On" is a createdTime field, so it comes from record metadata
     // rather than from `fields` — see TableSpec.createdAtColumn.
     createdAtColumn: 'created_on',
+  },
+
+  // ===========================================================================
+  // project_notes — 3,520 rows, 24 Airtable fields, three links.
+  //
+  // THE TABLE THAT BREAKS THE STANDING RULE, and deliberately so. Its "DCW
+  // Projects" field GENUINELY POINTS AT New Project Entry, unlike the
+  // identically named field on Time Tracking, which points at DCW Project
+  // Tasks. Same spelling, same base, two different targets — which is why the
+  // rule has to stay "check the target every time" rather than "this name
+  // means task".
+  //
+  // So this table carries ONE SCALAR LINK AND ONE JOIN LINK, which reads as
+  // inconsistent and is correct:
+  //
+  //   "DCW Projects"       single    -->  project_id          (projects)
+  //   "DCW Project Tasks"  MULTIPLE  -->  project_note_deliverables (join)
+  //   "Added  By"          single    -->  added_by_id         (people)
+  //
+  // Counted across the full population before deciding, per the cardinality
+  // rule above: 361 of 3,520 notes attach to more than one task (10%), so a
+  // scalar deliverable_id would drop the rest. 019 created the join and
+  // dropped that column.
+  // ===========================================================================
+
+  {
+    key: 'project_notes',
+    airtable: 'Project Notes',
+    joins: [
+      { from: 'DCW Project Tasks', table: 'project_note_deliverables',
+        parentColumn: 'project_note_id', childColumn: 'deliverable_id', linkTo: 'deliverables' },
+    ],
+    fields: [
+      { from: 'DCW Projects', to: 'project_id', kind: 'link', linkTo: 'projects' },
+      // THE DOUBLE SPACE IN "Added  By" IS REAL AND MUST BE PRESERVED. It is
+      // the field's actual name in Airtable; a single space matches nothing
+      // and the column would silently stay null on all 3,520 rows. The
+      // lookup "Image (from Added  By)" carries it too.
+      { from: 'Added  By', to: 'added_by_id', kind: 'link', linkTo: 'people' },
+      { from: 'Notes', to: 'notes', kind: 'text' },
+      // FIRST MULTI-SELECT IN THE MIRROR TO CARRY A CHOICES LIST, and it only
+      // became possible today. unknownChoice used to check value[0] alone, so
+      // a list on a multi-select would have read as guarding 13 options while
+      // checking one — which is why none of the thirteen text[] fields in this
+      // file has ever had one. It now checks every position.
+      //
+      // These labels are exactly the kind somebody tidies: "Billing
+      // Instructions / Request", "Cost Report Directives", "Pursuit Notes".
+      // Verified against the live base 2026-10-07, no trailing spaces.
+      {
+        from: 'Notes Include Info On:',
+        to: 'notes_include_info_on',
+        kind: 'text[]',
+        choices: [
+          'Billing Instructions / Request',
+          'Billing Question',
+          'Collections',
+          'Cost Report Directives',
+          'Quote',
+          'Document Link/Bluebeam Link',
+          'Schedule',
+          'Meeting Notes',
+          'Project Budget',
+          'Revisions',
+          'Miscellaneous Project Info / Correspondence',
+          'Pursuit Notes',
+          'Alternatives',
+        ],
+      },
+      { from: 'Docs Link/Bluebeam Session', to: 'docs_link_bluebeam_session', kind: 'text' },
+      // snip_image_paths: NOT MAPPED. Airtable attachment URLs expire after
+      // about two hours, so mirroring one stores a dead link.
+      //
+      // SIXTEEN MORE FIELDS ARE UNMAPPED AND ALL ARE DERIVED: 11 lookups
+      // (client company, project image, task status, due date and the rest —
+      // all reachable through project_id or the join), 3 formulas (Title,
+      // Record ID, AI Cost Database Summary), 1 aiText (Project Notes
+      // Summary) and 1 createdBy, which is an Airtable user rather than a
+      // Collaborators record and has no column.
+      //
+      // 24 fields: 5 mapped, 1 createdTime below, 1 join, 1 attachment, 16
+      // derived.
+    ],
+    // "Date Created" is a createdTime field — record metadata, not a field.
+    // NOTE THE COLUMN NAME: airtable_created_at here, not created_on as on
+    // out_of_office. Checked rather than copied.
+    createdAtColumn: 'airtable_created_at',
   },
 
 ];
