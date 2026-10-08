@@ -1,0 +1,107 @@
+-- ============================================================================
+-- 022 — a task may have no project, because one of them genuinely does not
+--
+-- deliverables.project_id becomes nullable. One line, and the decision behind
+-- it was made months before the evidence arrived.
+--
+-- ============================================================================
+-- ONE AIRTABLE RECORD, 10,838 TIME ENTRIES
+--
+-- recXCLgbkVXQtgUlk is a DCW Project Task named " - Non-billable". It is the
+-- bucket people log non-project work against: admin, training, time off.
+-- 10,838 of the 29,199 Time Tracking records point at it — 37%.
+--
+-- It has NO PROJECT, and that is correct. Non-billable work is not project
+-- work. But project_id was NOT NULL, so the sync could not write the task at
+-- all; it skipped the record, and every time entry pointing at it then failed
+-- to resolve.
+--
+-- The consequence, measured by the dry run on 2026-10-08: 37% of all time
+-- entries would load with deliverable_id null, and the run spent its entire
+-- budget writing an unresolved_link anomaly for each one at about 14 per
+-- second. The run did not fail because of the volume of data. It failed
+-- because of the volume of COMPLAINT about one missing row.
+--
+-- ============================================================================
+-- WHY NULLABLE AND NOT A SYNTHETIC PROJECT
+--
+-- The alternative was a "Non-project Work" project to hang these tasks off.
+-- That was considered and rejected when the seven unmappable records were
+-- first reviewed, before this case forced the issue, and the reasoning has
+-- not changed: it asserts a relationship the source does not. Airtable says
+-- this task has no project. Inventing one so a column can stay NOT NULL makes
+-- the schema tidier and the data less true, and every later query has to know
+-- that one project is not a project.
+--
+-- Same family as the rejected alternatives in 016 (filling deliverable_id
+-- from a task's deliverable) and 017 (filling project_id from a task's
+-- project). A column is not a reason to invent data; here, a constraint is
+-- not a reason either.
+--
+-- ============================================================================
+-- WHAT THIS DOES NOT BREAK, CHECKED RATHER THAN ASSUMED
+--
+--   pass-one.ts           `join projects p on p.id = d.project_id` — an inner
+--                         join, so a task with no project is simply absent
+--                         from reader context. Correct: there is no project
+--                         brief to read for non-billable time.
+--   v_observations        also inner-joins projects, so the same applies.
+--                         line_items is 0 rows, so nothing is live there yet.
+--   deliverables_project_id_idx   unaffected; a btree index allows nulls.
+--   deliverables_has_a_source     a check constraint on `source`, unrelated.
+--   5,558 existing rows   all have a project today, so nothing changes for
+--                         any row currently in the table.
+--
+-- The sync's own grant is unchanged: it already holds UPDATE on project_id.
+-- ============================================================================
+
+alter table deliverables alter column project_id drop not null;
+
+-- ============================================================================
+-- AFTER THIS, RE-SYNC deliverables BEFORE time_entries
+--
+-- The two tasks currently skipped only enter the mirror on the next
+-- deliverables run. Loading time_entries first would reproduce exactly the
+-- same 10,838 unresolved links, because the row they point at still would not
+-- be there.
+--
+--   {"tables": ["deliverables", "time_entries"]}
+--
+-- in that order, which is also LOAD_ORDER's order.
+--
+-- ============================================================================
+-- VERIFICATION
+--
+-- Uncomment and run as a second query. The first three rows follow from the
+-- statement above; the rest are measured AFTER the deliverables re-sync, and
+-- are written here as what to look for rather than as predictions:
+--
+--   project_id nullable            YES
+--   deliverables rows              5,558   (unchanged — nothing is deleted)
+--   rows with a project            5,558   (unchanged — nothing is cleared)
+--   SYNC CAN STILL UPDATE IT       true
+--
+-- then after re-syncing deliverables:
+--
+--   the non-billable task is in    true
+--   deliverables rows              5,560   (the two formerly skipped)
+--   rows with NO project           2
+--
+-- Run against production before committing, per the standing practice.
+-- ============================================================================
+--
+-- select 'project_id nullable' as item,
+--        (select is_nullable from information_schema.columns
+--          where table_schema='public' and table_name='deliverables'
+--            and column_name='project_id') as value
+-- union all select 'deliverables rows', (select count(*)::text from deliverables)
+-- union all select 'rows with a project', (select count(project_id)::text from deliverables)
+-- union all select 'SYNC CAN STILL UPDATE IT',
+--        has_column_privilege('airtable_sync','deliverables','project_id','UPDATE')::text
+-- union all select 'the non-billable task is in',
+--        exists (select 1 from deliverables
+--                 where airtable_record_id = 'recXCLgbkVXQtgUlk')::text
+-- union all select 'rows with NO project',
+--        (select count(*)::text from deliverables where project_id is null);
+--
+-- ============================================================================
