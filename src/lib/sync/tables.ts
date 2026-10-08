@@ -1177,10 +1177,31 @@ export const TABLES: readonly TableSpec[] = [
   {
     key: 'time_entries',
     airtable: 'Time Tracking',
+    // A JOIN, AND THE DRY RUN DECIDED IT. "DCW Projects" is marked
+    // prefersSingleRecordLink:true — the second table tonight where that flag
+    // was wrong — and ten of 29,215 records hold two or three tasks.
+    //
+    // Ten is small, and the ten are not all the same problem. Three of
+    // Tibbets Valley Park's links are the SAME TASK duplicated in Airtable,
+    // where keeping the first loses nothing. But Ryan Fouts logged SIX
+    // BILLABLE HOURS on 2026-07-22 against three genuinely different Pattison
+    // scopes, and a scalar column puts all six on the first and none on the
+    // other two. Six hours on the wrong scope is a reporting error.
+    //
+    // A column cannot tell those apart; it keeps the first either way. The
+    // join records both and makes the difference visible afterwards —
+    // duplicates show as several links to identically named tasks.
+    //
+    // 023 added the table and dropped deliverable_id.
+    joins: [
+      { from: 'DCW Projects', table: 'time_entry_deliverables',
+        parentColumn: 'time_entry_id', childColumn: 'deliverable_id', linkTo: 'deliverables' },
+    ],
     fields: [
+      // Both of these stay scalar on MEASUREMENT, not on the flag: across all
+      // 29,215 records the dry run found 0 with multiple collaborators and 0
+      // with multiple pursuits, 2026-10-08.
       { from: 'Collaborators', to: 'person_id', kind: 'link', linkTo: 'people' },
-      // Named for projects, points at TASKS. See above and 017.
-      { from: 'DCW Projects', to: 'deliverable_id', kind: 'link', linkTo: 'deliverables' },
       // 0 of 29,199 entries link a pursuit as of 2026-10-07 — the link exists,
       // points where its name says, and has never been used. NOT the 017 case:
       // that column had no source at all, this one has an empty source.

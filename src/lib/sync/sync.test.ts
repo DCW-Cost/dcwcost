@@ -1849,9 +1849,18 @@ test('time_entries DCW Projects resolves against deliverables, not projects', ()
   // the identically named field on project_notes points at New Project Entry.
   // 017 dropped time_entries.project_id over exactly this.
   const s = spec('time_entries');
-  const f = s.fields.find((x) => x.from === 'DCW Projects');
-  assert.ok(f, 'DCW Projects must be mapped');
-  assert.equal(f.to, 'deliverable_id');
+  // A JOIN since 023: ten of 29,215 records hold two or three tasks, and
+  // prefersSingleRecordLink said true. One of the ten is six BILLABLE hours
+  // across three distinct Pattison scopes.
+  assert.ok(
+    !s.fields.some((x) => x.to === 'deliverable_id'),
+    '023 dropped deliverable_id; the flag suggesting one task per entry is not enforced'
+  );
+  const f = s.joins?.find((j) => j.table === 'time_entry_deliverables');
+  assert.ok(f, 'tasks must be written to time_entry_deliverables');
+  assert.equal(f.from, 'DCW Projects');
+  assert.equal(f.parentColumn, 'time_entry_id');
+  assert.equal(f.childColumn, 'deliverable_id');
   assert.equal(f.linkTo, 'deliverables', 'named for projects, points at tasks');
   assert.ok(
     !s.fields.some((x) => x.to === 'project_id'),
@@ -1907,13 +1916,18 @@ test('the four trailing-space options in this base are written trimmed', () => {
   // unknownChoice trims the incoming value and compares against the list as
   // given, so a verbatim copy never matches and fires on every record.
   const te = spec('time_entries');
-  const edu = te.fields.find((f) => f.to === 'education_training_tags');
-  const cost = te.fields.find((f) => f.to === 'cost_planning_tags');
-  assert.ok(edu?.choices?.includes('Personal development'), 'Airtable has "Personal development "');
-  assert.ok(cost?.choices?.includes('QC3'), 'Airtable has "QC3 "');
+  const choicesFor = (to: string): readonly string[] => {
+    const f = te.fields.find((x) => x.to === to);
+    assert.ok(f?.choices, `${to} must carry its choices`);
+    return f.choices;
+  };
+  const edu = choicesFor('education_training_tags');
+  const cost = choicesFor('cost_planning_tags');
+  assert.ok(edu.includes('Personal development'), 'Airtable has "Personal development "');
+  assert.ok(cost.includes('QC3'), 'Airtable has "QC3 "');
   // And they still match the untrimmed value coming from Airtable.
-  assert.equal(unknownChoice(edu.choices, 'Personal development '), null);
-  assert.equal(unknownChoice(cost.choices, 'QC3 '), null);
+  assert.equal(unknownChoice(edu, 'Personal development '), null);
+  assert.equal(unknownChoice(cost, 'QC3 '), null);
 
   const ooo = spec('out_of_office').fields.find((f) => f.to === 'category');
   assert.ok(ooo?.choices?.includes('In Person Client Meeting/Event'));
