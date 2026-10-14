@@ -578,7 +578,7 @@ export function createSupabaseProvider(
       const seen = new Set<string>();
       const out: SyncAnomaly[] = [];
       for (const r of found) {
-        const key = [str(r.table_name), str(r.airtable_record_id), str(r.kind), str(r.field_name)].join(' ');
+        const key = [str(r.table_name), str(r.airtable_record_id), str(r.kind), str(r.field_name)].join('\u0000');
         if (seen.has(key)) continue;
         seen.add(key);
         out.push({

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
 import { parseWorkbook, buildDigest, searchWorkbook, readRange } from './workbook.ts';
-import { markupFactor, validateFrame, type RawFrame, type DocContext } from './frame.ts';
+import { markupFactor, validateFrame, contextText, type RawFrame, type DocContext } from './frame.ts';
 import { signedUrlMatches, parseTriggerBody } from './trigger.ts';
 import { clientConfig } from './db.ts';
 import { stamp } from './runlog.ts';
@@ -97,7 +97,7 @@ const ctx: DocContext = {
   uploadNotes: null,
   project: {
     name: 'Oregon Zoo',
-    clientName: null,
+    clientNames: [],
     sector: null,
     region: null,
     city: null,
@@ -251,4 +251,28 @@ test('scrub: signed URL tokens never reach the log', () => {
   const url = `${SUPA}/storage/v1/object/sign/${PATH}?token=eyJsecret`;
   assert.doesNotMatch(scrub(`fetch failed for ${url}`, [url]), /eyJsecret/);
   assert.doesNotMatch(scrub('GET ...?token=eyJother&x=1', []), /eyJother/);
+});
+
+test('the project context names every client, and says so when there are none', () => {
+  // projects.client_name is empty on all 1,874 rows — a text column that
+  // predates the mirror. The client lives in project_client_companies, and
+  // 30 of 1,760 projects carry two (a consultant pairing, never more).
+  const withClients = (clientNames: string[]): DocContext => ({
+    ...ctx,
+    project: { ...ctx.project, clientNames },
+  });
+
+  assert.match(contextText(withClients(['Port of Seattle'])), /client: Port of Seattle/);
+
+  assert.match(
+    contextText(withClients(['GS Consulting', 'SMR Architects'])),
+    /client: GS Consulting \+ SMR Architects/,
+    'both clients must reach the model, not just the first'
+  );
+
+  assert.match(
+    contextText(withClients([])),
+    /client: —/,
+    'an honest dash, not the string "undefined"'
+  );
 });
