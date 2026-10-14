@@ -58,6 +58,97 @@ export const POST: APIRoute = async ({ cookies, request }) => {
     return bad('Cost plans only — PDF, Excel or CSV.');
   }
 
+  // -------------------------------------------------------------------------
+  // ATTACHING TO AN EXISTING TASK — the path the work list uses.
+  //
+  // A cost report belongs to a task, and 5,560 of them are already mirrored
+  // from Airtable. When the caller names one, this endpoint creates NOTHING:
+  // no project, no deliverable. It fills in the upload columns on the row that
+  // is already there and hands back a signed URL keyed on that row's id.
+  //
+  // That is the whole reason the work list exists. The alternative below —
+  // pick a project or type a name — created a new project whenever the right
+  // one could not be found, which with a 500-row dropdown over 1,874 projects
+  // was most of the time.
+  //
+  // The sync will not undo this: `updatedColumns` only writes the columns in
+  // its field map, and none of the six upload columns are in it.
+  // -------------------------------------------------------------------------
+  const taskId = String(body.taskId ?? '').trim();
+  if (taskId) {
+    const { data: task, error: taskError } = await supabase
+      .from('deliverables')
+      .select('id, storage_path, project_task_title')
+      .eq('id', taskId)
+      .maybeSingle();
+
+    if (taskError) return bad(taskError.message);
+    if (!task) return bad('That task no longer exists. Reload the work list.', 404);
+
+    // Replacing means overwriting the object, and there is no UPDATE policy on
+    // storage.objects — only insert and an admin-only delete. Refuse clearly
+    // rather than hand back a URL that fails at the browser with a storage
+    // error nobody can act on.
+    if (task.storage_path) {
+      return bad(
+        'That task already has a cost report. Replacing one is not built yet — ' +
+          'remove the existing file first, or upload against a different task.',
+        409
+      );
+    }
+
+    const { data: claimed, error: claimError } = await supabase
+      .from('deliverables')
+      .update({
+        original_filename: filename.slice(0, 260),
+        byte_size: size,
+        uploaded_by: auth.user.id,
+        uploaded_at: new Date().toISOString(),
+        source_format: ext === 'pdf' ? 'pdf' : ext === 'csv' ? 'csv' : 'xlsx',
+        upload_notes: String(body.notes ?? '').trim().slice(0, 2000) || null,
+      })
+      .eq('id', taskId)
+      .select('id');
+
+    if (claimError) return bad(claimError.message);
+    // A denied UPDATE is not an error — PostgREST reports success with zero
+    // rows changed, which is the exact trap migration 003 was written for and
+    // that /documents/confirm already guards. Never let it pass as stored.
+    if (!claimed || claimed.length === 0) {
+      return bad(
+        'The database refused to attach a file to that task. Your account may ' +
+          'not have permission to upload against tasks you did not create.',
+        403
+      );
+    }
+
+    const taskKey = `${taskId}.${ext}`;
+    const { data: taskSigned, error: taskSignError } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUploadUrl(taskKey);
+
+    if (taskSignError || !taskSigned) {
+      // Nothing to roll back to — the row existed before this request and must
+      // keep existing. Clear only what this request wrote, so the task does not
+      // look like it has an upload in flight forever.
+      await supabase
+        .from('deliverables')
+        .update({ original_filename: null, byte_size: null, uploaded_by: null, uploaded_at: null })
+        .eq('id', taskId);
+      return bad(taskSignError?.message ?? 'Could not prepare the upload.');
+    }
+
+    return new Response(
+      JSON.stringify({
+        deliverableId: taskId,
+        signedUrl: taskSigned.signedUrl,
+        token: taskSigned.token,
+        path: taskSigned.path,
+      }),
+      { headers: { 'content-type': 'application/json' } }
+    );
+  }
+
   // A document hangs off a project, and `projects` is empty until the Airtable
   // sync runs, so the uploader may name one. They know what job this is.
   let projectId = String(body.projectId ?? '') || null;
