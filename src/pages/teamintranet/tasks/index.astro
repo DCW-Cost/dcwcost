@@ -1,0 +1,362 @@
+---
+/**
+ * The work list — every task, with the file attached to it.
+ *
+ * WHY THIS REPLACES THE PROJECT PICKER ON THE UPLOAD PAGE.
+ *
+ * A cost report belongs to a task, not a project. The Bond Planning job is
+ * one project carrying nine tasks — three schools across schematic design,
+ * design development and construction documents — and four of the pilot
+ * reports belong to it. Asked to choose a project for those four, there is no
+ * answer that tells them apart.
+ *
+ * The upload page asked anyway, from a dropdown capped at 500 of 1,874
+ * projects. Everything alphabetically after "Cu" was simply absent, so for
+ * roughly three-quarters of jobs the right project could not be chosen and
+ * the person typed a name instead — which created a new project. The orphans
+ * were not an edge case, they were the normal outcome.
+ *
+ * Choosing a row here attaches the file to a deliverable that already exists.
+ * Nothing is created, so nothing can be orphaned, and no one has to identify
+ * a project from a list at all.
+ *
+ * THE DEFAULT FILTER MIRRORS THE AIRTABLE VIEW this was modelled on: Phase II
+ * is Complete, due within the past year. That is 398 tasks here against 401
+ * in Airtable — close enough to be sync timing, and shown as a count so the
+ * difference is visible rather than assumed away.
+ */
+import IntranetLayout from '../../../layouts/IntranetLayout.astro';
+import { getProvider } from '../../../lib/intranet/data/index.ts';
+import type { TaskRow } from '../../../lib/intranet/data/types.ts';
+import {
+  filterTasks,
+  parseTaskSort,
+  sortTasks,
+  type TaskSortKey,
+} from '../../../lib/intranet/task-sort.ts';
+
+export const prerender = false;
+
+const provider = getProvider(Astro.cookies, Astro.request);
+
+const params = Astro.url.searchParams;
+const q = (params.get('q') ?? '').trim();
+
+// `all` widens each filter rather than removing the control, so the page can
+// always say what it is showing. A filter you cannot see is the same problem
+// as a cap you cannot see.
+const workflowParam = params.get('workflow') ?? 'Complete';
+const windowParam = params.get('window') ?? '365';
+const fileParam = params.get('file') ?? 'all';
+
+const workflow = workflowParam === 'all' ? null : workflowParam;
+const dueWithinDays = windowParam === 'all' ? null : Number(windowParam) || 365;
+const hasFile = fileParam === 'yes' ? true : fileParam === 'no' ? false : null;
+
+let tasks: TaskRow[] = [];
+let taskError = '';
+try {
+  tasks = await provider.listTasks({ workflow, dueWithinDays, hasFile });
+} catch (err) {
+  taskError = err instanceof Error ? err.message : String(err);
+}
+
+const { sort, dir } = parseTaskSort(params.get('sort'), params.get('dir'));
+const matched = filterTasks(tasks, q);
+const shown = sortTasks(matched, sort, dir);
+
+const withFile = tasks.filter((t) => t.hasFile).length;
+const withoutDue = tasks.filter((t) => t.dueDate === null).length;
+
+const ariaSort = (key: TaskSortKey) =>
+  sort === key ? ((dir === 'asc' ? 'ascending' : 'descending') as const) : ('none' as const);
+
+/** Carries every control so changing one never silently resets another. */
+function href(overrides: Record<string, string>): string {
+  const p = new URLSearchParams();
+  if (q) p.set('q', q);
+  p.set('workflow', workflowParam);
+  p.set('window', windowParam);
+  p.set('file', fileParam);
+  p.set('sort', sort);
+  p.set('dir', dir);
+  for (const [k, v] of Object.entries(overrides)) p.set(k, v);
+  return `?${p.toString()}`;
+}
+
+const sortHref = (key: TaskSortKey) =>
+  href({ sort: key, dir: sort === key && dir === 'asc' ? 'desc' : 'asc' });
+
+const COLUMNS: Array<{ key: TaskSortKey; label: string }> = [
+  { key: 'title', label: 'Task' },
+  { key: 'project', label: 'Project / number' },
+  { key: 'client', label: 'Client' },
+  { key: 'pm', label: 'Estimator' },
+  { key: 'due', label: 'Due' },
+  { key: 'workflow', label: 'Workflow' },
+  { key: 'file', label: 'Cost report' },
+];
+
+const WORKFLOW_CHOICES = [
+  'Complete',
+  'Draft Delivered',
+  'Quality Control',
+  'Report / Takeoff Development',
+  'Docs Received - Assigned',
+  'Docs Received - UNASSIGNED',
+];
+---
+
+<IntranetLayout
+  title="Work List"
+  crumb="Work List"
+  section="tasks"
+  meta={[`${tasks.length} tasks`, `${withFile} with a cost report`]}
+>
+  <section class="panel">
+    <h2>Work list</h2>
+    <p class="sub">
+      Every task, with the cost report attached to it. Upload from the row — the file
+      attaches to that task, so there is nothing to pick and no project to create.
+    </p>
+
+    {
+      taskError ? (
+        <p class="err">
+          <b>The work list could not be loaded.</b>
+          <br />
+          <code>{taskError}</code>
+        </p>
+      ) : (
+        <>
+          <form method="GET" class="searchrow">
+            <input
+              type="search"
+              name="q"
+              value={q}
+              placeholder="Task, project, client, estimator, or fee proposal number"
+              aria-label="Filter tasks"
+            />
+            <input type="hidden" name="workflow" value={workflowParam} />
+            <input type="hidden" name="window" value={windowParam} />
+            <input type="hidden" name="file" value={fileParam} />
+            <input type="hidden" name="sort" value={sort} />
+            <input type="hidden" name="dir" value={dir} />
+            <button type="submit">Filter</button>
+            {q ? <a href={href({ q: '' })}>Clear</a> : null}
+          </form>
+
+          <div class="filterbar">
+            <span class="flabel">Workflow</span>
+            <a href={href({ workflow: 'all' })} class={workflowParam === 'all' ? 'on' : undefined}>
+              any
+            </a>
+            {WORKFLOW_CHOICES.map((w) => (
+              <a href={href({ workflow: w })} class={workflowParam === w ? 'on' : undefined}>
+                {w}
+              </a>
+            ))}
+          </div>
+
+          <div class="filterbar">
+            <span class="flabel">Due</span>
+            {[
+              ['90', 'past 90 days'],
+              ['365', 'past year'],
+              ['1095', 'past 3 years'],
+              ['all', 'any date'],
+            ].map(([v, label]) => (
+              <a href={href({ window: v })} class={windowParam === v ? 'on' : undefined}>
+                {label}
+              </a>
+            ))}
+            <span class="flabel">Report</span>
+            {[
+              ['all', 'either'],
+              ['yes', 'uploaded'],
+              ['no', 'not yet'],
+            ].map(([v, label]) => (
+              <a href={href({ file: v })} class={fileParam === v ? 'on' : undefined}>
+                {label}
+              </a>
+            ))}
+          </div>
+
+          <p class="sub">
+            {shown.length === tasks.length
+              ? `${tasks.length} tasks`
+              : `${shown.length} of ${tasks.length} tasks`}
+            {withFile ? ` · ${withFile} with a cost report` : ''}
+            {/* Said out loud because the date filter excludes them, and a
+                count that quietly shrinks is the bug this page replaces. */}
+            {windowParam !== 'all' && withoutDue
+              ? ` · ${withoutDue} shown have no due date`
+              : ''}
+          </p>
+
+          {shown.length === 0 ? (
+            <p class="sub">
+              {tasks.length === 0
+                ? 'No tasks match those filters. Widen the workflow or date range above — this is a filter result, not an empty mirror.'
+                : 'Nothing matches that search.'}
+            </p>
+          ) : (
+            <table class="grid">
+              <thead>
+                <tr>
+                  {COLUMNS.map((c) => (
+                    <th aria-sort={ariaSort(c.key)}>
+                      <a href={sortHref(c.key)} class={sort === c.key ? 'sorted' : undefined}>
+                        {c.label}
+                        <span class="arrow" aria-hidden="true">
+                          {sort === c.key ? (dir === 'asc' ? '▲' : '▼') : '↕'}
+                        </span>
+                      </a>
+                    </th>
+                  ))}
+                  <th><span class="vh">Upload</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((t) => (
+                  <tr>
+                    <td>
+                      <div class="tasktitle">{t.title}</div>
+                      <div class="chips">
+                        {/* Chips, never parsed: this field also carries the
+                            billing arrangement — On-Call, Hourly, Pro Bono. */}
+                        {t.taskNumber.map((n) => (
+                          <span class="chip num">{n}</span>
+                        ))}
+                        {t.taskType.map((n) => (
+                          <span class="chip">{n}</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td>
+                      {t.projectName ?? <i class="none">no project</i>}
+                      {t.taskFeeProposal ? (
+                        <div class="fp">{t.taskFeeProposal}</div>
+                      ) : t.projectFeeProposal ? (
+                        <div class="fp">{t.projectFeeProposal}</div>
+                      ) : null}
+                    </td>
+                    <td>{t.clients.length ? t.clients.join(', ') : <i class="none">none</i>}</td>
+                    <td>
+                      {t.projectManagers.length ? (
+                        t.projectManagers.join(', ')
+                      ) : (
+                        <i class="none">none</i>
+                      )}
+                    </td>
+                    <td>{t.dueDate ?? <i class="none">none</i>}</td>
+                    <td>{t.workflow ?? <i class="none">none</i>}</td>
+                    <td>
+                      {t.hasFile ? (
+                        <span class="pill ok">{t.ingestStatus}</span>
+                      ) : (
+                        <i class="none">not uploaded</i>
+                      )}
+                    </td>
+                    <td class="actions">
+                      {t.folderLink ? (
+                        <a href={t.folderLink} target="_blank" rel="noreferrer noopener">
+                          Folder
+                        </a>
+                      ) : null}
+                      {/* No Replace button: there is no UPDATE policy on
+                          storage.objects, so overwriting an object fails, and
+                          offering a button that cannot work is worse than
+                          offering none. sign.ts refuses this case explicitly
+                          rather than handing back a URL that dies in the
+                          browser. */}
+                      {t.hasFile ? (
+                        <span class="sub">uploaded</span>
+                      ) : (
+                        <a class="btn" href={`/teamintranet/documents/?task=${t.id}`}>
+                          Upload
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )
+    }
+  </section>
+</IntranetLayout>
+
+<style>
+  .filterbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem 0.6rem;
+    margin: 0.5rem 0;
+    font-size: 0.85rem;
+  }
+  .flabel {
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem;
+  }
+  .filterbar a {
+    padding: 0.1rem 0.5rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    opacity: 0.65;
+    text-decoration: none;
+  }
+  .filterbar a.on {
+    opacity: 1;
+    font-weight: 600;
+  }
+  .tasktitle {
+    font-weight: 500;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+  }
+  .chip {
+    font-size: 0.72rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    opacity: 0.7;
+  }
+  .chip.num {
+    font-weight: 600;
+    opacity: 0.9;
+  }
+  .fp {
+    font-size: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    opacity: 0.7;
+  }
+  .pill {
+    font-size: 0.75rem;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+  }
+  .actions {
+    white-space: nowrap;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .vh {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+</style>

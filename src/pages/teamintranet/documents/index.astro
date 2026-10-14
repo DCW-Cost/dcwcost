@@ -20,6 +20,8 @@ import {
   uploadsEnabled,
 } from '../../../lib/intranet/documents.ts';
 import { formatDate } from '../../../lib/intranet/library.ts';
+import { getProvider } from '../../../lib/intranet/data/index.ts';
+import type { TaskRow } from '../../../lib/intranet/data/types.ts';
 
 export const prerender = false;
 
@@ -50,6 +52,32 @@ const [{ docs, error }, projects] = await Promise.all([
 ]);
 
 const waiting = docs.filter((d) => d.status === 'pending').length;
+
+/**
+ * Arriving from the work list with ?task=<id>.
+ *
+ * When a task is named, the project question does not arise: the document
+ * attaches to a deliverable that already exists. The picker is replaced by a
+ * plain statement of which task this is, so the page cannot be used to create
+ * a project by accident — which is how every orphan so far was made.
+ *
+ * An unknown or stale id falls back to the ordinary form rather than failing,
+ * and says so, because a dead link from a reloaded list should not block an
+ * upload someone can still complete by hand.
+ */
+const taskId = (Astro.url.searchParams.get('task') ?? '').trim();
+let task: TaskRow | null = null;
+let taskLookupFailed = false;
+if (taskId) {
+  try {
+    const provider = getProvider(Astro.cookies, Astro.request);
+    const all = await provider.listTasks({ workflow: null, dueWithinDays: null });
+    task = all.find((t) => t.id === taskId) ?? null;
+    taskLookupFailed = task === null;
+  } catch {
+    taskLookupFailed = true;
+  }
+}
 ---
 
 <IntranetLayout
@@ -113,19 +141,50 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
             <input type="file" name="file" accept={ACCEPT_ATTR} required />
           </label>
 
-          <div class="urow">
-            <label class="ufield">
-              <span class="sub">Project</span>
-              <select name="project_id">
-                <option value="">— new project, named below —</option>
-                {projects.map((p) => <option value={p.id}>{p.name}</option>)}
-              </select>
-            </label>
-            <label class="ufield grow">
-              <span class="sub">…or the name of a new one</span>
-              <input type="text" name="new_project" placeholder="Civic aquatic — Kent" />
-            </label>
-          </div>
+          {
+            task ? (
+              <div class="attached">
+                <input type="hidden" name="task_id" value={task.id} />
+                <span class="sub">Attaching to this task</span>
+                <div class="attached-title">{task.title}</div>
+                <div class="sub">
+                  {task.projectName ?? 'no project'}
+                  {task.taskFeeProposal ? ` · ${task.taskFeeProposal}` : ''}
+                  {task.clients.length ? ` · ${task.clients.join(', ')}` : ''}
+                </div>
+                <a class="sub" href="/teamintranet/tasks/">Choose a different task</a>
+              </div>
+            ) : (
+              <>
+                {taskLookupFailed && (
+                  <p class="sub">
+                    <b>That task could not be found.</b> It may have been removed, or the
+                    link may be stale. Pick a project below, or go back to the{' '}
+                    <a href="/teamintranet/tasks/">work list</a>.
+                  </p>
+                )}
+                <div class="urow">
+                  <label class="ufield">
+                    <span class="sub">Project</span>
+                    <select name="project_id">
+                      <option value="">— new project, named below —</option>
+                      {projects.map((p) => <option value={p.id}>{p.name}</option>)}
+                    </select>
+                  </label>
+                  <label class="ufield grow">
+                    <span class="sub">…or the name of a new one</span>
+                    <input type="text" name="new_project" placeholder="Civic aquatic — Kent" />
+                  </label>
+                </div>
+                <p class="sub">
+                  This dropdown shows only the first 500 of 1,874 projects, so most are
+                  missing — and typing a name creates a new project. Prefer the{' '}
+                  <a href="/teamintranet/tasks/">work list</a>, which attaches the file to a
+                  task that already exists.
+                </p>
+              </>
+            )
+          }
 
           <div class="urow">
             <label class="ufield">
@@ -320,6 +379,10 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
         body: JSON.stringify({
           filename: file.name,
           size: file.size,
+          // Set when the work list sent us here. sign.ts attaches to that
+          // task and ignores the project fields entirely — no project is
+          // chosen, and none can be created.
+          taskId: data.get('task_id') || '',
           projectId: data.get('project_id') || '',
           newProjectName: data.get('new_project') || '',
           estimator: data.get('estimator') || '',
@@ -440,4 +503,16 @@ const waiting = docs.filter((d) => d.status === 'pending').length;
   .steps { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.6rem; }
   .steps li { font-size: 0.86rem; color: var(--body); }
   .steps b { font-family: var(--brand); color: var(--ink); }
+
+  .attached {
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .attached-title {
+    font-weight: 600;
+  }
 </style>

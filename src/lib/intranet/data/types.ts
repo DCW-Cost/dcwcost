@@ -239,6 +239,76 @@ export interface ProjectSummary {
 }
 
 /**
+ * One row of the work list — a task, which is what a cost report actually
+ * attaches to.
+ *
+ * THE GRAIN IS THE TASK, NOT THE PROJECT, AND THAT IS THE WHOLE POINT.
+ *
+ * A document belongs to one task. One project may carry many: the Bond
+ * Planning job is a single project with nine tasks — three schools times
+ * schematic/design-development/construction-documents — and four of the
+ * sample reports belong to it. Asked to pick a project for those four, there
+ * is no answer that distinguishes them, which is why the upload page's
+ * project picker could never have worked no matter how good its search was.
+ *
+ * Picking a row here instead of a project means the file attaches to a
+ * deliverable that already exists, mirrored from Airtable. Nothing is
+ * created, so nothing can be orphaned.
+ */
+export interface TaskRow {
+  /** deliverables.id — what an upload attaches to. */
+  id: string;
+  title: string;
+  /** Multi-valued in Airtable: a task may be both 'Concept' and 'Option Study'. */
+  taskType: string[];
+  /**
+   * Also multi-valued, and NOT only a number: the same field carries the
+   * billing arrangement, so 'On-Call', 'Hourly', 'Pro Bono', 'No Bill' and
+   * 'Split Task' appear alongside 'Task 1' and 'Task 2b'. Render as chips;
+   * never parse it for an ordinal.
+   */
+  taskNumber: string[];
+  projectManagers: string[];
+  clients: string[];
+  dueDate: string | null;
+  /** Airtable's 'Phase II: On the Table (Workflow)' — ten states, 'Complete' last. */
+  workflow: string | null;
+  folderLink: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  /**
+   * The project's fee proposal, e.g. 'FP-OR-2025-0088'. This is what DCW uses
+   * as a project number. 89% of projects have one; the format varies enough
+   * (`FPSEA-2019-0086c`) that it is matched by substring, never parsed.
+   */
+  projectFeeProposal: string | null;
+  /** The task's own, which is the project's plus a suffix: 'FP-WA-2026-0106-2'. */
+  taskFeeProposal: string | null;
+  /** True once a cost report has been attached to this task. */
+  hasFile: boolean;
+  uploadedAt: string | null;
+  /** deliverables.status — where the reader has got to with it. */
+  ingestStatus: string;
+}
+
+/**
+ * What to fetch. Deliberately narrow: these are the filters the database can
+ * apply, so the page never has to hold all 5,560 tasks to show 398 of them.
+ * Text search is done in the page over the returned set, which is small.
+ */
+export interface TaskFilters {
+  /** Airtable's default view is 'Complete'. null means every state. */
+  workflow?: string | null;
+  /**
+   * Due within this many days, matching Airtable's "the past year". Omit for
+   * no date bound — which returns the 2,718 tasks with no due date too.
+   */
+  dueWithinDays?: number | null;
+  /** true: only tasks that already have a file. false: only those without. */
+  hasFile?: boolean | null;
+}
+
+/**
  * Something the sync could not handle, still unresolved.
  *
  * These are written on every run and have never been readable by anyone but
@@ -272,6 +342,14 @@ export interface DataProvider {
   listEstimates(): Promise<Array<Pick<Estimate, 'id' | 'name' | 'status' | 'updatedAt' | 'createdByName'>>>;
   /** Mirrored projects, for eyeballing what the sync loaded. Read-only. */
   listProjectSummaries(): Promise<ProjectSummary[]>;
+  /**
+   * The work list. Returns every task the filter matches — never a truncated
+   * page — because a silently capped list is the exact bug this view replaces:
+   * the upload page's project picker showed the first 500 of 1,874 projects
+   * alphabetically, so three-quarters of them could not be chosen and people
+   * typed a new project name instead, creating an orphan.
+   */
+  listTasks(filters: TaskFilters): Promise<TaskRow[]>;
   /** Unresolved sync anomalies, newest first. Read-only. */
   listOpenAnomalies(): Promise<SyncAnomaly[]>;
 }

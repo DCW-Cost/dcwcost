@@ -2,7 +2,16 @@
 import type { Profile } from '../../lib/intranet/data/types.ts';
 
 export interface Props {
-  section: 'library' | 'projects' | 'estimates' | 'queue' | 'documents' | 'wishlist' | 'faq' | 'admin';
+  section:
+    | 'library'
+    | 'projects'
+    | 'tasks'
+    | 'estimates'
+    | 'queue'
+    | 'documents'
+    | 'wishlist'
+    | 'faq'
+    | 'admin';
   user: Profile;
   openQuestions: number;
 }
@@ -12,6 +21,7 @@ const { section, user, openQuestions } = Astro.props;
 const links = [
   { key: 'library', href: '/teamintranet/', label: 'Cost Library' },
   { key: 'projects', href: '/teamintranet/projects/', label: 'Projects' },
+  { key: 'tasks', href: '/teamintranet/tasks/', label: 'Work List' },
   { key: 'estimates', href: '/teamintranet/estimates/', label: 'Estimate Builder' },
   { key: 'queue', href: '/teamintranet/queue/', label: 'Reader Queue', badge: openQuestions },
   { key: 'documents', href: '/teamintranet/documents/', label: 'Add Documents' },
