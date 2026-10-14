@@ -66,9 +66,20 @@ export interface Observation {
 
   projectId: string;
   projectName: string;
-  clientName: string;
+  /**
+   * A project may have several clients, so this is an array — and it comes
+   * from project_client_companies, not projects.client_name, which is empty
+   * on all 1,874 rows. Empty array when the project has no client recorded.
+   */
+  clientNames: string[];
   sector: string;
   region: string;
+  /**
+   * The gross area the READER measured for this document and recorded on its
+   * frame, not projects.gross_sf — which 020 cleared and which is null on all
+   * 1,874 rows. Every $/SF figure in this observation uses this denominator,
+   * and the frame records where it came from and how confident the reader was.
+   */
   grossSf: number;
   deliverableType: DeliverableType;
   phase: DesignPhase;
@@ -82,8 +93,25 @@ export interface Observation {
   hasOpenAssumption: boolean;
 }
 
+/**
+ * Which level of a document an observation was read at.
+ *
+ * `elemental` is one row per UNIFORMAT element off a document's summary tabs;
+ * `detail` is one row per priced line off its working tabs. They describe the
+ * same money at two resolutions, so pooling across them double-counts. See
+ * migration 024.
+ */
+export type LineGrain = 'elemental' | 'detail';
+
 export interface LibraryFilters {
   taxonomyCode: string;
+  /**
+   * Defaults to `elemental`. NEVER widen this to "both" — the elemental rows
+   * for a section ARE its detail rows added up, so a pool containing both
+   * counts the same cost twice and every statistic drawn from it is wrong by
+   * a margin that looks plausible.
+   */
+  grain?: LineGrain;
   sectors?: string[];
   regions?: string[];
   minGrossSf?: number;

@@ -23,6 +23,9 @@ There are three states here, and they are not the same:
 | `vanished` anomaly kind | `sync_anomaly_kind` enum | **0 occurrences** of the string anywhere in `src/` |
 | `value_disagreement` anomaly kind | `sync_anomaly_kind` enum | emitter removed with `deriveGrossSf` in 020 — see below |
 | trigger refusing while a run is live | `src/pages/api/sync/trigger.ts` | no 409 path exists; parked, never built |
+| pass two, anything that writes `line_items` | nothing | `line_items` holds **0 rows**; no code path inserts into it. The whole cost library is declared and unbuilt |
+| `v_observations` returning a row | `schema.sql`, rebuilt in 024 | **0 of 5,560** deliverables are `accepted`, so the view has never returned anything. It compiled; that is all that is known |
+| `grain = 'detail'` | `line_grain` enum, 024 | option B. The enum value exists so the column can be honest about what elemental means; nothing writes it yet |
 
 A kind in the enum with no emitter reads, to anyone browsing the schema, as a
 case that is being handled.
@@ -40,6 +43,28 @@ the wrong thing. Re-run as `grep "'value_disagreement'"` it has one emitter.
 |---|---|---|
 | run budget, before each table | `run.ts:200` | no run has exceeded `RUN_BUDGET_MS` (13 min); since batching, runs finish in 3–4s |
 | run budget, per page | `run.ts:390` | same |
+| the grain filter | `supabase.ts` `getObservations` | defaults to `elemental` and is the guard against double-counting — but only one grain has ever existed, so it has never had anything to exclude. It becomes real the day pass two writes a `detail` row, and that is the day to prove it |
+
+### 024's empty-table guard, which has fired
+
+Not on this list, and that is the point of saying so. The guard in 024 refuses
+to add `line_items.grain` to a non-empty table and explains why instead of
+letting Postgres say "column contains null values".
+
+Rachel ran it against a non-empty `line_items` on 2026-10-14. It raised before
+the `alter`, with the hint intact, and — once the file was wrapped in a
+transaction — rolled back cleanly: afterwards the column, the type and the view
+were all absent, so the database was exactly as it had been rather than half
+migrated.
+
+> a guard that has only ever passed is one we can't trust, and this one has now
+> failed on purpose
+
+That is the whole standard. Three defects in these two files were found by
+replaying them rather than reading them: an unguarded `create type` that aborted
+every later statement, two inserts with no `on conflict`, and an unnamed index.
+All three looked fine on the page.
+| PDF framing | `pass-one.ts:103` | still throws `PDF framing is not built yet`. Rachel asked for PDF as an option on 2026-10-13; nothing has changed since |
 
 ### value_disagreement, and the fourth state it used to occupy
 

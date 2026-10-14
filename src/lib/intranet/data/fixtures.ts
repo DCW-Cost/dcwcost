@@ -146,7 +146,7 @@ function buildObservations(): Observation[] {
         basis: p.markup === 1 ? 'bare' : 'loaded',
         projectId: `p${pi}`,
         projectName: p.project,
-        clientName: p.client,
+        clientNames: p.client ? [p.client] : [],
         sector: p.sector,
         region: p.region,
         grossSf: p.sf,
