@@ -182,10 +182,13 @@ export function createSupabaseProvider(
 
     projectId: str(r.project_id),
     projectName: str(r.project_name),
-    clientName: str(r.client_name),
+    // The view returns '{}' rather than null, but a provider is not the place
+    // to trust that — a non-array becomes an empty list rather than a crash.
+    clientNames: Array.isArray(r.client_names) ? r.client_names.filter(Boolean).map(String) : [],
     sector: str(r.sector),
     region: str(r.region),
-    grossSf: num(r.project_gross_sf),
+    // The frame's measured area, not the project's. See Observation.grossSf.
+    grossSf: num(r.gsf_used),
     deliverableType: str(r.deliverable_type) as DeliverableType,
     phase: str(r.phase) as DesignPhase,
     issueDate: str(r.issue_date),
@@ -364,6 +367,12 @@ export function createSupabaseProvider(
           // Descendants of the requested node, not just exact matches: asking for
           // A10 should return A1010 and A1020 too.
           .like('taxonomy_code', `${filters.taxonomyCode}%`)
+          // Exactly one grain, always. The descendant match above makes this
+          // load-bearing rather than tidy: asking for A10 matches A1010 too,
+          // so without this a pool would hold the A10 elemental row AND the
+          // A1010 detail rows that add up to part of it — the same dollars
+          // twice, in a result that still looks like a reasonable spread.
+          .eq('grain', filters.grain ?? 'elemental')
           // Markup rows are the stack, not priced work. Never pooled.
           .eq('is_markup', false)
           // A superseded issuance is kept as evidence but excluded by default
@@ -392,8 +401,11 @@ export function createSupabaseProvider(
         if (filters.sectors?.length) q = q.in('sector', filters.sectors);
         if (filters.regions?.length) q = q.in('region', filters.regions);
         if (filters.phases?.length) q = q.in('phase', filters.phases);
-        if (filters.minGrossSf != null) q = q.gte('project_gross_sf', filters.minGrossSf);
-        if (filters.maxGrossSf != null) q = q.lte('project_gross_sf', filters.maxGrossSf);
+        // gsf_used, not project_gross_sf: 020 cleared the latter and it is null
+        // on all 1,874 projects, so these filters previously matched nothing and
+        // read as "no comparable projects" rather than as a broken filter.
+        if (filters.minGrossSf != null) q = q.gte('gsf_used', filters.minGrossSf);
+        if (filters.maxGrossSf != null) q = q.lte('gsf_used', filters.maxGrossSf);
 
         // The tiebreaker is not cosmetic. Paging by position requires a total
         // order, and every line from one document shares an issue date — so

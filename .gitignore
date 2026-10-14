@@ -14,3 +14,6 @@ node_modules/
 .DS_Store
 # logs
 npm-debug.log*
+
+# Local scratch: sample workbooks, one-off extraction scripts. Never committed.
+.scratch/
