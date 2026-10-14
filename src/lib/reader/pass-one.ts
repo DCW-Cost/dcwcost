@@ -226,15 +226,34 @@ async function failDocument(dbUrl: string, deliverableId: string, runId: string 
 
 async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
   const d = await db.query(
+    // THE CLIENT COMES FROM THE JOIN, NOT FROM projects.client_name.
+    //
+    // That text column is empty on all 1,874 rows. It predates the Airtable
+    // mirror, when a project was typed in by hand at upload; in Airtable the
+    // client is a LINK, so it became project_client_companies. Migration 006
+    // said the sync should keep the text column in step "until a later
+    // migration retires" it — neither happened.
+    //
+    // This mattered more than a blank line in the prompt: client_name also
+    // filtered client-scoped conventions below, so every rule ever learned
+    // for a specific client was silently skipped. No error, no warning — the
+    // reader would just ask the same question again next time.
     `select d.id, d.original_filename, d.type, d.phase, d.issue_date::text as issue_date, d.estimator, d.upload_notes,
-            p.name, p.client_name, p.sector, p.region, p.city, p.gross_sf, p.delivery_method,
-            p.airtable_record_id is not null as from_airtable
+            p.name, p.sector, p.region, p.city, p.gross_sf, p.delivery_method,
+            p.airtable_record_id is not null as from_airtable,
+            coalesce((
+              select array_agg(cc.company_name order by cc.company_name)
+                from project_client_companies pcc
+                join client_companies cc on cc.id = pcc.client_company_id
+               where pcc.project_id = p.id
+            ), '{}') as client_names
        from deliverables d join projects p on p.id = d.project_id
       where d.id = $1`,
     [deliverableId]
   );
   const r = d.rows[0];
   if (!r) throw new Error('deliverable or its project is not readable');
+  const clientNames: string[] = Array.isArray(r.client_names) ? r.client_names.filter(Boolean) : [];
 
   // Conventions are narrow on purpose (PLAN §6.5): a rule scoped to one
   // estimator, client or date range applies only there. Template-scoped rules
@@ -246,12 +265,15 @@ async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
        from reader_conventions
       where active and superseded_by is null and scope_template is null
         and (scope_estimator is null or lower(scope_estimator) = lower($1))
-        and (scope_client is null or lower(scope_client) = lower($2))
+        -- ANY of the project's clients, not one. A convention scoped to
+        -- "SMR Architects" must still apply to a project carrying both
+        -- "GS Consulting" and "SMR Architects". $2 arrives lowercased.
+        and (scope_client is null or lower(scope_client) = any($2::text[]))
         and (scope_from is null or ($3::date is not null and $3::date >= scope_from))
         and (scope_to is null or ($3::date is not null and $3::date <= scope_to))
       order by id
       limit 50`,
-    [r.estimator ?? '', r.client_name ?? '', r.issue_date]
+    [r.estimator ?? '', clientNames.map((n) => n.toLowerCase()), r.issue_date]
   );
 
   // What has already been asked about this document, and answered. A re-read
@@ -275,7 +297,7 @@ async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
     uploadNotes: r.upload_notes,
     project: {
       name: r.name,
-      clientName: r.client_name,
+      clientNames,
       sector: r.sector,
       region: r.region,
       city: r.city,

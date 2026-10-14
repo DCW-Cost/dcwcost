@@ -59,7 +59,20 @@ export interface DocContext {
   uploadNotes: string | null;
   project: {
     name: string;
-    clientName: string | null;
+    /**
+     * Every client company on the project, from project_client_companies.
+     *
+     * NOT projects.client_name, which is empty on all 1,874 rows. That text
+     * column predates the Airtable mirror, when a project was typed in by
+     * hand at upload. Migration 006 said the sync should keep it in step with
+     * the link "until a later migration retires the text column"; neither
+     * happened, so it sits empty while the real answer is one join away.
+     *
+     * An array because 30 of 1,760 projects carry two companies — usually a
+     * consultant pairing, e.g. "GS Consulting + SMR Architects". Never more
+     * than two, measured 2026-10-14.
+     */
+    clientNames: string[];
     sector: string | null;
     region: string | null;
     city: string | null;
@@ -484,7 +497,7 @@ export function contextText(ctx: DocContext): string {
     '',
     `PROJECT RECORD (${p.fromAirtable ? "mirrored from DCW's Airtable" : 'entered by hand at upload — not from Airtable'})`,
     `  name: ${p.name}`,
-    `  client: ${p.clientName ?? '—'}   sector: ${p.sector ?? '—'}   region: ${p.region ?? '—'}   city: ${p.city ?? '—'}`,
+    `  client: ${p.clientNames.length ? p.clientNames.join(' + ') : '—'}   sector: ${p.sector ?? '—'}   region: ${p.region ?? '—'}   city: ${p.city ?? '—'}`,
     `  gross area on record: ${p.grossSf ?? '(none)'}   delivery method: ${p.deliveryMethod ?? '—'}`,
     '',
     'STANDING CONVENTIONS THAT MAY APPLY (learned from earlier answers; cite the ids you rely on)',
