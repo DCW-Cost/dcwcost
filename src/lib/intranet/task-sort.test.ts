@@ -6,6 +6,7 @@ import {
   parseTaskSort,
   sortTasks,
   workflowRank,
+  taskTitle,
   workflowTone,
   WORKFLOW_ORDER,
 } from './task-sort.ts';
@@ -234,4 +235,65 @@ test('every state in the production enum has its own tone, bar the one pair Airt
 test('an unknown or absent state still gets a tone, so it renders as a chip', () => {
   assert.equal(workflowTone('Some New State Airtable Grew'), 'delivered');
   assert.equal(workflowTone(null), 'delivered');
+});
+
+/**
+ * The real case that exposed this. Two tasks on Columbia Place both rendered
+ * as "Columbia Place", distinguishable only by a date in another column — so
+ * the file someone was looking for could not be matched to either row.
+ */
+test('the distinguishing detail lives in task_name, so it must appear', () => {
+  assert.equal(
+    taskTitle('Columbia Place', '60% Design (25% COMPLETE)', 'Columbia Place', 'id-1'),
+    '60% Design (25% COMPLETE)',
+  );
+  assert.equal(
+    taskTitle('Columbia Place', '60% Design (75% COMPLETE)', 'Columbia Place', 'id-2'),
+    '60% Design (75% COMPLETE)',
+  );
+});
+
+/**
+ * project_task_title is literally the project's own name on 2,979 of 5,560
+ * rows. Repeating it says the same words twice in a row that already has a
+ * Project column.
+ */
+test('a title that merely repeats the project name is dropped', () => {
+  assert.equal(
+    taskTitle('Columbia Place', 'Schematic Design', 'Columbia Place', 'x'),
+    'Schematic Design',
+  );
+  assert.equal(
+    taskTitle('  columbia place  ', 'Schematic Design', 'Columbia Place', 'x'),
+    'Schematic Design',
+  );
+});
+
+test('a title that genuinely differs from the project is kept, and joined', () => {
+  assert.equal(
+    taskTitle('Bond Planning — High School', 'Schematic Design', 'Bond Planning', 'x'),
+    'Bond Planning — High School — Schematic Design',
+  );
+});
+
+test('the same words are never printed twice', () => {
+  assert.equal(
+    taskTitle('Schematic Design', 'Schematic Design', 'Some Project', 'x'),
+    'Schematic Design',
+  );
+});
+
+/**
+ * task_name is empty on 288 rows. Those must still render something: a row
+ * with no title is a row nobody can click.
+ */
+test('a missing task_name falls back rather than blanking the row', () => {
+  assert.equal(taskTitle('Programming Study', '', 'Some Project', 'x'), 'Programming Study');
+  assert.equal(taskTitle('Some Project', '', 'Some Project', 'id-9'), 'Some Project');
+  assert.equal(taskTitle('', '', 'Some Project', 'id-9'), 'id-9');
+  assert.equal(taskTitle('   ', '   ', 'Some Project', 'id-9'), 'id-9');
+});
+
+test('a task genuinely named after its project still shows, rather than blanking', () => {
+  assert.equal(taskTitle('Columbia Place', 'Columbia Place', 'Columbia Place', 'x'), 'Columbia Place');
 });
