@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { TaskRow } from './data/types.ts';
+import type { TaskRow } from './tasks.ts';
 import {
   filterTasks,
   parseTaskSort,

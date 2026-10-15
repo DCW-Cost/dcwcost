@@ -5,7 +5,7 @@
  * logic inside an .astro file cannot be called by a test, and "it's obviously
  * fine" is said most often about small things.
  */
-import type { TaskRow } from './data/types.ts';
+import type { TaskRow } from './tasks.ts';
 
 export const TASK_SORT_KEYS = [
   'due',

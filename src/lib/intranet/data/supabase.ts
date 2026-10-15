@@ -50,8 +50,6 @@ import type {
   ProjectSummary,
   ReaderQuestion,
   SyncAnomaly,
-  TaskFilters,
-  TaskRow,
   TaxonomyNode,
 } from './types.ts';
 
@@ -570,114 +568,6 @@ export function createSupabaseProvider(
           sector: Array.isArray(r.sector) ? r.sector.map(str).filter(Boolean) : [],
           city: Array.isArray(r.city) ? r.city.map(str).filter(Boolean) : [],
           taskCount: taskCounts.get(str(r.id)) ?? 0,
-        };
-      });
-    },
-
-    async listTasks(filters: TaskFilters): Promise<TaskRow[]> {
-      // allRows for the same reason as listProjectSummaries: PostgREST caps an
-      // unbounded select at 1,000 and says nothing. Unfiltered this is 5,560
-      // tasks, so the cap is not hypothetical — it would drop 4,560 of them
-      // and still render a plausible-looking page.
-      const found = await allRows('listTasks', (from, to) => {
-        let q = db
-          .from('deliverables')
-          .select(
-            `id, project_task_title, task_name, task_type, task_number, due_date,
-             phase_ii_workflow, project_folder_link, fee_proposal, status,
-             storage_path, uploaded_at,
-             projects(id, name, fee_proposal),
-             deliverable_project_managers(people(name))`,
-          )
-          .range(from, to);
-
-        // Mirrors Airtable's own view: Phase II is Complete, due in the past
-        // year. Both are optional here so the page can widen them.
-        if (filters.workflow != null) q = q.eq('phase_ii_workflow', filters.workflow);
-
-        if (filters.dueWithinDays != null) {
-          const since = new Date();
-          since.setUTCDate(since.getUTCDate() - filters.dueWithinDays);
-          // A task with no due date is excluded by this bound rather than
-          // included as "infinitely old" — 2,718 have none, and sweeping them
-          // in would make the date filter look broken.
-          q = q.gte('due_date', since.toISOString().slice(0, 10));
-        }
-
-        // storage_path is what makes a file real; uploaded_at is set beside it
-        // but is not the column the reader checks, so this matches the reader.
-        if (filters.hasFile === true) q = q.not('storage_path', 'is', null);
-        if (filters.hasFile === false) q = q.is('storage_path', null);
-
-        return q;
-      });
-
-      // Clients come from a second query rather than a third level of
-      // embedding. Two levels is proven in this file (listProjectSummaries);
-      // three is not, and a nested embed that silently returns nothing would
-      // show every task with no client — wrong in the direction nobody
-      // questions, which is the failure this whole page exists to avoid.
-      const projectIds = [
-        ...new Set(found.map((r) => str(((r.projects ?? {}) as Row).id)).filter(Boolean)),
-      ];
-      const clientsByProject = new Map<string, string[]>();
-      if (projectIds.length > 0) {
-        const links = await allRows('listTasks.clients', (from, to) =>
-          db
-            .from('project_client_companies')
-            .select('project_id, client_companies(company_name)')
-            .in('project_id', projectIds)
-            .range(from, to),
-        );
-        for (const link of links) {
-          const pid = str(link.project_id);
-          const nameOfCompany = str(((link.client_companies ?? {}) as Row).company_name);
-          if (!pid || !nameOfCompany) continue;
-          const list = clientsByProject.get(pid) ?? [];
-          if (!list.includes(nameOfCompany)) list.push(nameOfCompany);
-          clientsByProject.set(pid, list);
-        }
-        for (const list of clientsByProject.values()) list.sort();
-      }
-
-      return found.map((r): TaskRow => {
-        const project = (r.projects ?? {}) as Row;
-
-        const pmLinks = Array.isArray(r.deliverable_project_managers)
-          ? (r.deliverable_project_managers as Row[])
-          : [];
-        const projectManagers: string[] = [];
-        for (const link of pmLinks) {
-          // people has no table-level SELECT for `authenticated` — only
-          // column grants, which cover `name` and deliberately do not cover
-          // hourly_profit_rate. Selecting the one column keeps that intact.
-          const nameOfPerson = str(((link?.people ?? {}) as Row).name);
-          if (nameOfPerson && !projectManagers.includes(nameOfPerson)) {
-            projectManagers.push(nameOfPerson);
-          }
-        }
-        projectManagers.sort();
-
-        return {
-          id: str(r.id),
-          // project_task_title is filled on 5,559 of 5,560; task_name is the
-          // fallback and the id is the last resort, so a row is never blank
-          // and therefore never invisible in the list.
-          title: str(r.project_task_title) || str(r.task_name) || str(r.id),
-          taskType: Array.isArray(r.task_type) ? r.task_type.map(str).filter(Boolean) : [],
-          taskNumber: Array.isArray(r.task_number) ? r.task_number.map(str).filter(Boolean) : [],
-          projectManagers,
-          clients: clientsByProject.get(str(project.id)) ?? [],
-          dueDate: r.due_date == null ? null : str(r.due_date),
-          workflow: r.phase_ii_workflow == null ? null : str(r.phase_ii_workflow),
-          folderLink: r.project_folder_link == null ? null : str(r.project_folder_link),
-          projectId: project.id == null ? null : str(project.id),
-          projectName: project.name == null ? null : str(project.name),
-          projectFeeProposal: project.fee_proposal == null ? null : str(project.fee_proposal),
-          taskFeeProposal: r.fee_proposal == null ? null : str(r.fee_proposal),
-          hasFile: r.storage_path != null,
-          uploadedAt: r.uploaded_at == null ? null : str(r.uploaded_at),
-          ingestStatus: str(r.status),
         };
       });
     },
