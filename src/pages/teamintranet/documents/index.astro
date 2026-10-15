@@ -10,6 +10,7 @@
 import IntranetLayout from '../../../layouts/IntranetLayout.astro';
 import {
   listDocuments,
+  listEstimators,
   listProjects,
   uploadDocument,
   humanSize,
@@ -30,7 +31,7 @@ if (Astro.request.method === 'POST') {
     file: form.get('file') as File,
     projectId: (String(form.get('project_id') ?? '') || null) as string | null,
     newProjectName: String(form.get('new_project') ?? ''),
-    estimator: String(form.get('estimator') ?? ''),
+    estimatorId: String(form.get('estimator_id') ?? ''),
     issueDate: String(form.get('issue_date') ?? ''),
     notes: String(form.get('notes') ?? ''),
   });
@@ -45,10 +46,14 @@ if (Astro.request.method === 'POST') {
 const okMsg = Astro.url.searchParams.get('ok');
 const badMsg = Astro.url.searchParams.get('bad');
 
-const [{ docs, error }, projects] = await Promise.all([
+const [{ docs, error }, projects, estimators] = await Promise.all([
   listDocuments(Astro.cookies, Astro.request),
   listProjects(Astro.cookies, Astro.request),
+  listEstimators(Astro.cookies, Astro.request),
 ]);
+
+const currentStaff = estimators.filter((p) => p.current);
+const formerStaff = estimators.filter((p) => !p.current);
 
 const waiting = docs.filter((d) => d.status === 'pending').length;
 
@@ -75,6 +80,16 @@ if (taskId) {
     taskLookupFailed = true;
   }
 }
+
+/**
+ * The task already knows who ran it, so offer those names first and preselect
+ * the first. Matched by name because the work list carries names, not ids —
+ * an unmatched name simply does not appear here, which is correct: it means
+ * that person is not in `people` and so cannot be referenced anyway.
+ */
+const onThisTask = task
+  ? estimators.filter((p) => task.projectManagers.includes(p.name))
+  : [];
 ---
 
 <IntranetLayout
@@ -186,7 +201,41 @@ if (taskId) {
           <div class="urow">
             <label class="ufield">
               <span class="sub">Who priced it</span>
-              <input type="text" name="estimator" placeholder="Brian Thompson" />
+              {/*
+                A list, not a text box. The column is free text and empty on
+                all 5,560 rows, so nothing had drifted yet — and nothing was
+                going to stop it: "Katya Nichols", "katya" and "K. Nichols"
+                are three estimators to any later query.
+
+                Former staff are listed, below a separator, because the
+                archive is a decade deep and six of the nine people who have
+                left ran tasks. Blank stays available for the case the list
+                genuinely cannot cover.
+              */}
+              <select name="estimator_id">
+                <option value="">— not stated —</option>
+                {
+                  onThisTask.length > 0 && (
+                    <optgroup label="On this task">
+                      {onThisTask.map((p, i) => (
+                        <option value={p.id} selected={i === 0}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )
+                }
+                <optgroup label="Current">
+                  {currentStaff.map((p) => <option value={p.id}>{p.name}</option>)}
+                </optgroup>
+                {
+                  formerStaff.length > 0 && (
+                    <optgroup label="No longer at DCW">
+                      {formerStaff.map((p) => <option value={p.id}>{p.name}</option>)}
+                    </optgroup>
+                  )
+                }
+              </select>
             </label>
             <label class="ufield">
               <span class="sub">Issue date</span>
@@ -398,7 +447,7 @@ if (taskId) {
           taskId: data.get('task_id') || '',
           projectId: data.get('project_id') || '',
           newProjectName: data.get('new_project') || '',
-          estimator: data.get('estimator') || '',
+          estimatorId: data.get('estimator_id') || '',
           issueDate: data.get('issue_date') || '',
           notes: data.get('notes') || '',
         }),

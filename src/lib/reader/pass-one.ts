@@ -238,7 +238,8 @@ async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
     // filtered client-scoped conventions below, so every rule ever learned
     // for a specific client was silently skipped. No error, no warning — the
     // reader would just ask the same question again next time.
-    `select d.id, d.original_filename, d.type, d.phase, d.issue_date::text as issue_date, d.estimator, d.upload_notes,
+    `select d.id, d.original_filename, d.type, d.phase, d.issue_date::text as issue_date,
+            d.estimator_id, est.name as estimator, d.upload_notes,
             p.name, p.sector, p.region, p.city, p.gross_sf, p.delivery_method,
             p.airtable_record_id is not null as from_airtable,
             coalesce((
@@ -247,7 +248,12 @@ async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
                 join client_companies cc on cc.id = pcc.client_company_id
                where pcc.project_id = p.id
             ), '{}') as client_names
-       from deliverables d join projects p on p.id = d.project_id
+       from deliverables d
+       join projects p on p.id = d.project_id
+       -- LEFT: an unattributed document is still readable. Only the
+       -- convention scoping and the distinct-estimator count care who priced
+       -- it, and both treat null as "does not narrow".
+       left join people est on est.id = d.estimator_id
       where d.id = $1`,
     [deliverableId]
   );
@@ -260,11 +266,15 @@ async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
   // need a template fingerprint, which pass one does not compute yet, so they
   // are not offered.
   const c = await db.query(
-    `select id, kind, rule, rationale, scope_estimator, scope_client,
+    `select id, kind, rule, rationale, scope_estimator_id, scope_client,
             scope_from::text as scope_from, scope_to::text as scope_to
        from reader_conventions
       where active and superseded_by is null and scope_template is null
-        and (scope_estimator is null or lower(scope_estimator) = lower($1))
+        -- An id match, not lower(a) = lower(b) between two free-text fields.
+        -- 026: a convention scoped to one estimator would silently fail to
+        -- fire for a document whose estimator was spelled differently, and
+        -- nothing reported that it had not.
+        and (scope_estimator_id is null or scope_estimator_id = $1::uuid)
         -- ANY of the project's clients, not one. A convention scoped to
         -- "SMR Architects" must still apply to a project carrying both
         -- "GS Consulting" and "SMR Architects". $2 arrives lowercased.
@@ -273,7 +283,7 @@ async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
         and (scope_to is null or ($3::date is not null and $3::date <= scope_to))
       order by id
       limit 50`,
-    [r.estimator ?? '', clientNames.map((n) => n.toLowerCase()), r.issue_date]
+    [r.estimator_id ?? null, clientNames.map((n) => n.toLowerCase()), r.issue_date]
   );
 
   // What has already been asked about this document, and answered. A re-read
@@ -312,7 +322,7 @@ async function readContext(db: Db, deliverableId: string): Promise<DocContext> {
       rationale: row.rationale,
       scope:
         [
-          row.scope_estimator && `estimator ${row.scope_estimator}`,
+          row.scope_estimator_id && `estimator ${r.estimator ?? row.scope_estimator_id}`,
           row.scope_client && `client ${row.scope_client}`,
           (row.scope_from || row.scope_to) && `dates ${row.scope_from ?? '…'} to ${row.scope_to ?? '…'}`,
         ]

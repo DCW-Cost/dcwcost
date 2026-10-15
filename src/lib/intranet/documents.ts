@@ -131,7 +131,12 @@ export async function listDocuments(
   const { data, error } = await supabase
     .from('deliverables')
     .select(
-      'id, original_filename, status, uploaded_at, byte_size, issue_date, estimator, upload_notes, storage_path, airtable_record_id'
+      // One string literal, not a concatenation: supabase-js infers the row
+      // type from the literal, and anything it cannot parse degrades to an
+      // error type that only shows up at the .map below.
+      // estimator comes through the people join since 026 — it is a
+      // reference now, and the name is for display only.
+      'id, original_filename, status, uploaded_at, byte_size, issue_date, estimator_id, people(name), upload_notes, storage_path, airtable_record_id'
     )
     .eq('source', 'upload')
     .order('uploaded_at', { ascending: false })
@@ -155,7 +160,8 @@ export async function listDocuments(
     uploadedByName: null,
     byteSize: (r.byte_size as number) ?? null,
     issueDate: (r.issue_date as string) ?? null,
-    estimator: (r.estimator as string) ?? null,
+    estimator:
+      ((r.people as Record<string, unknown> | null)?.name as string | undefined) ?? null,
     notes: (r.upload_notes as string) ?? null,
     hasFile: Boolean(r.storage_path ?? r.airtable_record_id),
   }));
@@ -179,7 +185,8 @@ export async function uploadDocument(
     /** An existing project, or null when `newProjectName` names a new one. */
     projectId: string | null;
     newProjectName: string;
-    estimator: string;
+    /** people.id, not a name. See 026. */
+    estimatorId: string;
     issueDate: string;
     notes: string;
   }
@@ -228,7 +235,7 @@ export async function uploadDocument(
       byte_size: file.size,
       uploaded_by: auth.user.id,
       uploaded_at: new Date().toISOString(),
-      estimator: input.estimator.trim() || null,
+      estimator_id: input.estimatorId || null,
       issue_date: input.issueDate || null,
       upload_notes: input.notes.trim().slice(0, 2000) || null,
       source_format: ext === 'pdf' ? 'pdf' : ext === 'csv' ? 'csv' : 'xlsx',
@@ -290,4 +297,41 @@ export async function listProjects(
     id: String(p.id),
     name: String(p.name ?? 'Untitled'),
   }));
+}
+
+/**
+ * Who can be named as having priced a document.
+ *
+ * A dropdown rather than a text box, because `estimator` is a free-text
+ * column that is empty on all 5,560 rows — so nothing has drifted yet, and
+ * nothing was going to stop it the moment people started typing. "Katya
+ * Nichols", "katya", "K. Nichols" and "Katya Nicols" are four estimators as
+ * far as any later query is concerned.
+ *
+ * FORMER STAFF ARE INCLUDED, and that is the point of ordering rather than
+ * filtering. The archive is a decade of documents; nine of the twenty-four
+ * people here have left, and six of those ran tasks. Excluding them would
+ * force free text for precisely the historical documents this tool exists to
+ * read.
+ *
+ * Current staff sort first so the common case is at the top. Twenty-four
+ * names needs no search box.
+ */
+export async function listEstimators(
+  cookies: AstroCookies,
+  request: Request
+): Promise<Array<{ id: string; name: string; current: boolean }>> {
+  const supabase = serverClient(cookies, request);
+  if (!supabase) return [];
+  // `people` has no table-level SELECT for `authenticated` — only column
+  // grants, which cover name and status and deliberately do not cover
+  // hourly_profit_rate. Naming the columns keeps that protection intact.
+  const { data } = await supabase.from('people').select('id, name, status').order('name');
+  return (data ?? [])
+    .map((r: Record<string, unknown>) => ({
+      id: String(r.id ?? ''),
+      name: String(r.name ?? '').trim(),
+      current: String(r.status ?? '') === 'Active',
+    }))
+    .filter((p) => p.id !== '' && p.name !== '');
 }
