@@ -1,0 +1,81 @@
+-- ============================================================================
+-- 027 — give v_observations back its grants
+--
+-- The cost library reads everything through v_observations. `authenticated`
+-- has no SELECT on it, and neither does `cost_reader`. The provider connects
+-- as the signed-in person, so the library page fails the moment that view has
+-- a row to return. It returns zero today, which is the only reason nobody has
+-- hit it.
+--
+-- DROPPING A VIEW DROPS ITS GRANTS. THAT IS THE WHOLE LESSON.
+--
+-- 012 granted them — `grant select on v_observations, v_question_answers,
+-- v_wishlist to authenticated`, after recreating the view, plus a separate
+-- grant to cost_reader. Measured today, the two views in that statement that
+-- have never been dropped since still have their grants:
+--
+--   v_question_answers -> authenticated   true
+--   v_wishlist         -> authenticated   true
+--   v_observations     -> authenticated   FALSE
+--   v_observations     -> cost_reader     FALSE
+--
+-- Three migrations drop v_observations: 012, 024 and 026. Only 012 re-grants.
+-- 024 and 026 recreate it and stop there, so whatever removed the grants
+-- first, those two guaranteed they stayed removed.
+--
+-- A dropped-and-recreated view is a NEW object with no privileges. Nothing
+-- errors, nothing warns, and the verification blocks in 024 and 026 both
+-- checked the view's shape — columns, security_invoker, row count — without
+-- once checking who could read it. Shape is not access.
+--
+-- THE RULE, for anything that touches this view again: if you drop it, grant
+-- it. The verification below belongs in every future migration that does.
+--
+-- cost_reader is restored too. It is the reader's own role, and 012 gave it
+-- SELECT deliberately — pass three reconciles extracted totals against the
+-- pool, which means reading observations.
+-- ============================================================================
+
+begin;
+
+grant select on v_observations to authenticated;
+grant select on v_observations to cost_reader;
+
+commit;
+
+-- ============================================================================
+-- REPLAY-SAFE. GRANT is idempotent — re-granting an existing privilege is a
+-- no-op, not an error — so this file can be run any number of times.
+--
+-- Note what is NOT granted, and deliberately: nothing to `anon`. An
+-- unauthenticated caller must not read cost observations, and the absence
+-- here is the enforcement.
+--
+-- The view is security_invoker, so this grant does not widen what anyone can
+-- actually see: row-level security on line_items, deliverables, projects and
+-- the rest still applies as the signed-in person. The grant only restores the
+-- ability to query the view at all.
+--
+-- VERIFICATION — expected after applying, AND IDENTICAL after a second apply:
+--
+--   authenticated SELECT on v_observations   true
+--   cost_reader SELECT on v_observations     true
+--   anon SELECT on v_observations            false
+--   view is still security_invoker           true
+--   v_observations rows                      0
+--
+-- Run against production before committing, per the standing practice.
+-- ============================================================================
+--
+-- select 'authenticated SELECT on v_observations' as item,
+--        has_table_privilege('authenticated','v_observations','SELECT')::text as value
+-- union all select 'cost_reader SELECT on v_observations',
+--        has_table_privilege('cost_reader','v_observations','SELECT')::text
+-- union all select 'anon SELECT on v_observations (must stay false)',
+--        has_table_privilege('anon','v_observations','SELECT')::text
+-- union all select 'view is still security_invoker',
+--        (select (c.reloptions::text like '%security_invoker=true%')::text
+--           from pg_class c where c.relname='v_observations')
+-- union all select 'v_observations rows', (select count(*)::text from v_observations);
+--
+-- ============================================================================

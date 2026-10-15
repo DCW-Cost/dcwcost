@@ -66,7 +66,7 @@ every later statement, two inserts with no `on conflict`, and an unnamed index.
 All three looked fine on the page.
 | PDF framing | `pass-one.ts:103` | still throws `PDF framing is not built yet`. Rachel asked for PDF as an option on 2026-10-13; nothing has changed since |
 | convention matching by estimator | `pass-one.ts`, after 026 | `reader_conventions` holds **0 rows** and always has. Until 026 this compared two free-text fields with `lower(a) = lower(b)`, so a convention scoped to one person would not fire for a document whose estimator was spelled differently — and nothing reported that it had not. It is now an id match. That moves it from **broken and unnoticed** to **fixed and unconfirmed**, which is a different state, not a better one |
-| `v_observations` readable by the app | grants | `authenticated` has **no SELECT on the view** — only postgres and service_role. The provider connects as the signed-in person, so the library page will fail the moment the view has rows to return. It returns 0 today, which is why nothing has complained. Measured again after 026: still false |
+| `v_observations` returning a row to a signed-in person | grants restored in 027 | The grant is back for `authenticated` and `cost_reader`, verified on production. But the view still returns **0 rows**, so nobody has yet read anything through it. Fixed, unconfirmed |
 
 ### value_disagreement, and the fourth state it used to occupy
 
@@ -121,6 +121,26 @@ the `vanished` anomaly that describes exactly what it detects. Wiring the two
 together moves `vanished` out of "declared, no code" but not out of this file,
 because 0 stale means it would emit nothing. Retiring it needs a test that hands
 the path a pair Airtable no longer has and asserts the anomaly appears.
+
+### Shape is not access
+
+`v_observations` had no SELECT grant for `authenticated` or `cost_reader`, so
+the library page would have failed the moment the view had a row. 012 granted
+both, correctly, after recreating the view. 024 and 026 each dropped and
+recreated it and granted nothing — **dropping a view drops its privileges, and
+the new object starts with none.**
+
+The two other views in 012's grant statement, never dropped since, still have
+theirs. That is how the cause was isolated.
+
+What makes this worth writing down is not the missing grant. It is that the
+verification blocks in both 024 and 026 checked the view's columns, its
+`security_invoker` setting and its row count — and passed, twice, while the
+view was unreadable by the only role that queries it. Every check was about
+the view's SHAPE. None was about who could see it.
+
+**Any migration that drops a view must re-grant it, and must verify the grant
+rather than the shape.** 027 carries the verification to copy.
 
 ## How things leave this list
 
