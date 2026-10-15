@@ -54,6 +54,22 @@ const roleLabel = user.role === 'admin' ? 'Admin' : user.role === 'estimator' ? 
     </ul>
   </nav>
 
+  {/*
+    Light / dark / system. Rendered as three real buttons rather than a
+    checkbox so "system" is a visible choice and not the absence of one —
+    otherwise someone who wants to follow their OS has no way to say so after
+    they have picked anything else.
+
+    Pressed state is set by script on load, not here: the server does not know
+    what is in this browser's localStorage, so rendering a guess would be
+    wrong on the first paint for anyone who has chosen.
+  */}
+  <div class="themepick" role="group" aria-label="Colour theme">
+    <button type="button" data-theme-set="light" title="Light">Light</button>
+    <button type="button" data-theme-set="dark" title="Dark">Dark</button>
+    <button type="button" data-theme-set="system" title="Follow your device">System</button>
+  </div>
+
   <div class="whoami">
     <b>{user.fullName}</b>
     <span style="overflow-wrap:anywhere">{user.email}</span><br />
@@ -65,3 +81,45 @@ const roleLabel = user.role === 'admin' ? 'Admin' : user.role === 'estimator' ? 
     >
   </div>
 </aside>
+
+<script is:inline>
+  (function () {
+    var KEY = 'dcw-theme';
+    var root = document.documentElement;
+    var buttons = document.querySelectorAll('[data-theme-set]');
+
+    function current() {
+      try {
+        var t = localStorage.getItem(KEY);
+        return t === 'light' || t === 'dark' ? t : 'system';
+      } catch (e) {
+        // Storage blocked. The OS setting is still in force, so say so.
+        return 'system';
+      }
+    }
+
+    function paint(choice) {
+      for (var i = 0; i < buttons.length; i++) {
+        var on = buttons[i].getAttribute('data-theme-set') === choice;
+        buttons[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    }
+
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function () {
+        var choice = this.getAttribute('data-theme-set');
+        try {
+          if (choice === 'system') localStorage.removeItem(KEY);
+          else localStorage.setItem(KEY, choice);
+        } catch (e) {
+          // Cannot persist, but still honour the click for this page.
+        }
+        if (choice === 'system') root.removeAttribute('data-theme');
+        else root.setAttribute('data-theme', choice);
+        paint(choice);
+      });
+    }
+
+    paint(current());
+  })();
+</script>

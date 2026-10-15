@@ -190,7 +190,23 @@ if (taskId) {
             </label>
             <label class="ufield">
               <span class="sub">Issue date</span>
-              <input type="date" name="issue_date" />
+              {/*
+                The native control, not a library. This project has no UI
+                dependencies at all, and the browser's own picker already
+                handles locale, keyboard entry and screen readers better than
+                a hand-rolled calendar would. What it lacks is discoverability
+                — a bare mm/dd/yyyy box with a tiny glyph — so the script
+                below opens it from anywhere in the field and the shortcuts
+                cover the two dates anyone actually types.
+              */}
+              <div class="datefield">
+                <input type="date" name="issue_date" id="issue_date" />
+                <div class="dateshort">
+                  <button type="button" data-date-set="0">Today</button>
+                  <button type="button" data-date-set="-7">A week ago</button>
+                  <button type="button" data-date-set="clear">Clear</button>
+                </div>
+              </div>
             </label>
           </div>
 
@@ -437,6 +453,41 @@ if (taskId) {
 </script>
 
 
+<script is:inline>
+  (function () {
+    var input = document.getElementById('issue_date');
+    if (!input) return;
+
+    // Clicking the field anywhere opens the calendar. showPicker throws if
+    // called without a user gesture, and does not exist on older browsers —
+    // either way the field still works by typing, so failure is silent.
+    input.addEventListener('click', function () {
+      if (typeof input.showPicker === 'function') {
+        try { input.showPicker(); } catch (e) { /* not a gesture, or unsupported */ }
+      }
+    });
+
+    function iso(d) {
+      // Local date, not toISOString(): that converts to UTC first, so an
+      // evening in Seattle reports tomorrow's date.
+      var m = String(d.getMonth() + 1).padStart(2, '0');
+      var day = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+
+    var shortcuts = document.querySelectorAll('[data-date-set]');
+    for (var i = 0; i < shortcuts.length; i++) {
+      shortcuts[i].addEventListener('click', function () {
+        var v = this.getAttribute('data-date-set');
+        if (v === 'clear') { input.value = ''; return; }
+        var d = new Date();
+        d.setDate(d.getDate() + Number(v));
+        input.value = iso(d);
+      });
+    }
+  })();
+</script>
+
 <style>
   .readnow { display: inline-block; margin-left: 0.4rem; }
   .readnow .btn { padding: 0.15rem 0.55rem; font-size: 0.78rem; }
@@ -516,4 +567,29 @@ if (taskId) {
     font-weight: 600;
     color: var(--ink);
   }
+
+  .datefield { display: flex; flex-direction: column; gap: 5px; }
+  .datefield input[type='date'] { cursor: pointer; }
+  /* The native glyph is tiny and low-contrast in both themes. Scale it up and
+     tint it so it reads as a control rather than a smudge. */
+  .datefield input[type='date']::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.55;
+    filter: light-dark(none, invert(1));
+    transform: scale(1.15);
+  }
+  .datefield input[type='date']:hover::-webkit-calendar-picker-indicator { opacity: 1; }
+  .dateshort { display: flex; gap: 5px; }
+  .dateshort button {
+    appearance: none;
+    font-family: var(--ui);
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--paper);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .dateshort button:hover { border-color: var(--blue); color: var(--blue); }
 </style>
