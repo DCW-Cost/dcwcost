@@ -81,15 +81,10 @@ grant select (estimator_id) on deliverables to cost_reader;
 
 grant select (id, name) on people to cost_reader;
 
-do $$
-begin
-  if not exists (select 1 from pg_policies
-                  where tablename = 'people' and policyname = 'people_reader_read') then
-    create policy people_reader_read on people
-      for select to cost_reader
-      using (true);
-  end if;
-end $$;
+drop policy if exists people_reader_read on people;
+create policy people_reader_read on people
+  for select to cost_reader
+  using (true);
 
 -- ----------------------------------------------------------------------------
 -- 3. The client join
@@ -103,30 +98,31 @@ end $$;
 grant select (project_id, client_company_id) on project_client_companies to cost_reader;
 grant select (id, company_name) on client_companies to cost_reader;
 
-do $$
-begin
-  if not exists (select 1 from pg_policies
-                  where tablename = 'project_client_companies'
-                    and policyname = 'project_client_companies_reader_read') then
-    create policy project_client_companies_reader_read on project_client_companies
-      for select to cost_reader
-      using (true);
-  end if;
-  if not exists (select 1 from pg_policies
-                  where tablename = 'client_companies'
-                    and policyname = 'client_companies_reader_read') then
-    create policy client_companies_reader_read on client_companies
-      for select to cost_reader
-      using (true);
-  end if;
-end $$;
+drop policy if exists project_client_companies_reader_read on project_client_companies;
+create policy project_client_companies_reader_read on project_client_companies
+  for select to cost_reader
+  using (true);
+
+drop policy if exists client_companies_reader_read on client_companies;
+create policy client_companies_reader_read on client_companies
+  for select to cost_reader
+  using (true);
 
 commit;
 
 -- ============================================================================
 -- REPLAY-SAFE. GRANT is idempotent, and `create policy` has no IF NOT EXISTS
--- so each is wrapped in a pg_policies check — the pattern 007 and 011 use.
+-- — not in 17, not anywhere — so each is preceded by `drop policy if exists`.
 -- One transaction, so a failure leaves none of it.
+--
+-- The first version of this file wrapped each create in a `do $$ ... if not
+-- exists (select 1 from pg_policies)` block instead. That is also idempotent,
+-- and it replayed cleanly three times — but it is not what this repo does,
+-- and a comment here claimed it was "the pattern 007 and 011 use", which was
+-- simply false: every migration that creates a policy uses drop-then-create.
+--
+-- The repo's own replay guard caught it. One pattern, uniformly, is what lets
+-- a guard like that mean anything.
 --
 -- VERIFICATION — expected after applying, AND IDENTICAL after a second apply:
 --
