@@ -106,6 +106,7 @@ export const POST: APIRoute = async ({ cookies, request }) => {
         uploaded_at: new Date().toISOString(),
         source_format: ext === 'pdf' ? 'pdf' : ext === 'csv' ? 'csv' : 'xlsx',
         upload_notes: String(body.notes ?? '').trim().slice(0, 2000) || null,
+        estimator_id: String(body.estimatorId ?? '') || null,
       })
       .eq('id', taskId)
       .select('id');
@@ -173,7 +174,10 @@ export const POST: APIRoute = async ({ cookies, request }) => {
       byte_size: size,
       uploaded_by: auth.user.id,
       uploaded_at: new Date().toISOString(),
-      estimator: String(body.estimator ?? '').trim() || null,
+      // A reference, not a name. 026: counting distinct free text defeats
+      // the >=2 distinct estimators confidence rule, because one person
+      // spelled two ways satisfies it.
+      estimator_id: String(body.estimatorId ?? '') || null,
       issue_date: String(body.issueDate ?? '') || null,
       upload_notes: String(body.notes ?? '').trim().slice(0, 2000) || null,
       source_format: ext === 'pdf' ? 'pdf' : ext === 'csv' ? 'csv' : 'xlsx',

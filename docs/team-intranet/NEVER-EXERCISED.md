@@ -65,6 +65,8 @@ replaying them rather than reading them: an unguarded `create type` that aborted
 every later statement, two inserts with no `on conflict`, and an unnamed index.
 All three looked fine on the page.
 | PDF framing | `pass-one.ts:103` | still throws `PDF framing is not built yet`. Rachel asked for PDF as an option on 2026-10-13; nothing has changed since |
+| convention matching by estimator | `pass-one.ts`, after 026 | `reader_conventions` holds **0 rows** and always has. Until 026 this compared two free-text fields with `lower(a) = lower(b)`, so a convention scoped to one person would not fire for a document whose estimator was spelled differently — and nothing reported that it had not. It is now an id match. That moves it from **broken and unnoticed** to **fixed and unconfirmed**, which is a different state, not a better one |
+| `v_observations` readable by the app | grants | `authenticated` has **no SELECT on the view** — only postgres and service_role. The provider connects as the signed-in person, so the library page will fail the moment the view has rows to return. It returns 0 today, which is why nothing has complained. Measured again after 026: still false |
 
 ### value_disagreement, and the fourth state it used to occupy
 
