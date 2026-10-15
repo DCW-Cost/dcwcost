@@ -194,6 +194,39 @@ The three habits that produce that:
    A check that has only ever fired on the broken case is half-tested. Run
    it on the good case too — and prefer a good case you did not write.
 
+7. **A new object inherits nothing, and the thing that protects you is the
+   thing that trips you.** `cost_reader` holds COLUMN-level grants on
+   `deliverables` — deliberate, and the reason the reader cannot see what it
+   should not. The same property means a column added later is not in the
+   list, and a table joined later is not granted at all.
+
+   Three changes in one week widened what pass one reads and granted none of
+   it: 026 added `estimator_id` and selected it; 026 joined `people`; the week
+   before, the reader was taught to find clients through
+   `project_client_companies`. That third one had never run successfully —
+   the two runs that worked in September predate it, so "the reader works"
+   was true of a version that read fewer tables.
+
+   `reader_conventions` needed nothing from 028, because the reader holds a
+   TABLE-level grant there and new columns come free. Same change, opposite
+   outcome, decided entirely by which kind of grant was in place.
+
+   So: after changing what any query selects, or what any role may read, run
+   the audit at the bottom of 028 — every column the query names, checked
+   against the role. It returns the blocked ones. It is the boundary no
+   typecheck, test or build can see.
+
+8. **Ask what the check would NOT catch.** The verification blocks in 024 and
+   026 checked a view's columns, its `security_invoker` setting and its row
+   count. Both passed. Both times the view was unreadable by the only role
+   that queries it, and neither block asked who could read it.
+
+   The eight failures of 2026-10-15 were caught by: a replay (1), me reviewing
+   (1), and Rachel using the thing (6). **Zero by the 219 tests, the typecheck
+   or the build** — because every one lived at a boundary those tools do not
+   model: grants, PostgREST relationship resolution, real row counts, real URL
+   lengths. More tests of the same kind would have caught none of them.
+
 ## Why this file exists
 
 Each of the following was discovered separately, and each had looked covered:
