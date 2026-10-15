@@ -17,8 +17,6 @@ import type {
   Observation,
   Profile,
   ReaderQuestion,
-  TaskFilters,
-  TaskRow,
   TaxonomyNode,
 } from './types.ts';
 
@@ -422,83 +420,6 @@ export const fixtureProvider: DataProvider = {
         taskCount: 0,
       },
     ];
-  },
-
-  /**
-   * Shaped after the awkward cases in the real data rather than the tidy
-   * ones, because a fixture that only shows tidy rows proves the page works
-   * on data that does not exist:
-   *
-   *  - two tasks on ONE project, which is why the grain is the task (the real
-   *    Bond Planning job has nine, and four sample reports belong to it);
-   *  - a task number carrying a billing arrangement, not an ordinal;
-   *  - a task with no due date, no PM and no client, which 2,718 rows have at
-   *    least one of;
-   *  - one row that already has a file, so the uploaded state is visible.
-   */
-  async listTasks(filters: TaskFilters) {
-    const all: TaskRow[] = [
-      {
-        id: 'task-1',
-        title: 'Bond Planning — Elementary School (ES) — Task 1 — Schematic Design',
-        taskType: ['Schematic Design (SD)'],
-        taskNumber: ['Task 1'],
-        projectManagers: ['Example Estimator'],
-        clients: ['Example Architects LLP'],
-        dueDate: '2026-10-09',
-        workflow: 'Complete',
-        folderLink: 'https://example.com/folder/1',
-        projectId: 'fixture-1',
-        projectFeeProposal: 'FP-WA-2026-0106',
-        taskFeeProposal: 'FP-WA-2026-0106-1',
-        projectName: 'Bond Planning',
-        hasFile: true,
-        uploadedAt: '2026-10-10T17:04:00.000Z',
-        ingestStatus: 'framed',
-      },
-      {
-        id: 'task-2',
-        title: 'Bond Planning — Stadium Improvements — Task 1 — Schematic Design',
-        taskType: ['Schematic Design (SD)', 'Option Study / Analysis (OA) / Planning'],
-        taskNumber: ['Task 1'],
-        projectManagers: ['Example Estimator', 'Second Estimator'],
-        clients: ['Example Architects LLP'],
-        dueDate: '2026-09-04',
-        workflow: 'Complete',
-        folderLink: null,
-        projectId: 'fixture-1',
-        projectFeeProposal: 'FP-WA-2026-0106',
-        taskFeeProposal: 'FP-WA-2026-0106-3',
-        projectName: 'Bond Planning',
-        hasFile: false,
-        uploadedAt: null,
-        ingestStatus: 'pending',
-      },
-      {
-        id: 'task-3',
-        title: 'Civic Plaza Renewal — On-Call — Alternate',
-        taskType: [],
-        taskNumber: ['On-Call', 'Task 1 Add Service'],
-        projectManagers: [],
-        clients: [],
-        dueDate: null,
-        workflow: null,
-        folderLink: null,
-        projectId: 'fixture-2',
-        projectFeeProposal: null,
-        taskFeeProposal: null,
-        projectName: 'Civic Plaza Renewal',
-        hasFile: false,
-        uploadedAt: null,
-        ingestStatus: 'pending',
-      },
-    ];
-
-    return all.filter(
-      (t) =>
-        (filters.workflow == null || t.workflow === filters.workflow) &&
-        (filters.hasFile == null || t.hasFile === filters.hasFile),
-    );
   },
 
   async listOpenAnomalies() {
