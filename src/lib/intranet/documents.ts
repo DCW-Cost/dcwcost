@@ -136,7 +136,16 @@ export async function listDocuments(
       // error type that only shows up at the .map below.
       // estimator comes through the people join since 026 — it is a
       // reference now, and the name is for display only.
-      'id, original_filename, status, uploaded_at, byte_size, issue_date, estimator_id, people(name), upload_notes, storage_path, airtable_record_id'
+      // people!<fk name>, not people. deliverables has TWO foreign keys to
+      // people — estimator_id, added by 026, and next_action_owner_id, which
+      // was always there. A bare `people(name)` is ambiguous the moment the
+      // second one exists, and PostgREST refuses the whole query:
+      //   "more than one relationship was found for 'deliverables' and 'people'"
+      // which took out the entire Add Documents page, not just this column.
+      // Naming the constraint is the only thing that disambiguates it, and
+      // nothing in the build or the typecheck can catch this — it is a
+      // runtime refusal from PostgREST.
+      'id, original_filename, status, uploaded_at, byte_size, issue_date, estimator_id, people!deliverables_estimator_id_fkey(name), upload_notes, storage_path, airtable_record_id'
     )
     .eq('source', 'upload')
     .order('uploaded_at', { ascending: false })
