@@ -19,6 +19,7 @@
  */
 import type { AstroCookies } from 'astro';
 import { serverClient } from './auth.ts';
+import { taskTitle } from './task-sort.ts';
 
 type Row = Record<string, unknown>;
 
@@ -117,30 +118,51 @@ async function allRows(
  * silently returns nothing would show every task with no client — wrong in the
  * direction nobody questions.
  *
- * CHUNKED, because `in()` goes into the URL. 1,800 project ids at 37 characters
- * each is a 66 KB query string, well past what the edge will accept, and the
- * whole lookup fails — which is how the unfiltered case broke.
+ * TWO STRATEGIES, PICKED BY SIZE, BECAUSE in() GOES INTO THE URL.
+ *
+ * Filtering by id costs one request per 150 ids and a query string that grows
+ * with them — 1,800 ids is 66 KB, past what the edge accepts, which is how the
+ * unfiltered lookup failed in the first place.
+ *
+ * But the join table is small: 1,790 rows, two pages. Past a few hundred ids
+ * it is both faster and safer to fetch the lot and filter in memory. For the
+ * unfiltered work list that is 2 requests instead of 13, and no URL to
+ * outgrow.
+ *
+ * Measured 2026-10-15: 1,790 links across 1,869 projects.
  */
+const FETCH_ALL_ABOVE = 400;
+
 async function clientsFor(
   db: NonNullable<ReturnType<typeof serverClient>>,
   projectIds: string[],
 ): Promise<Map<string, string[]>> {
   const byProject = new Map<string, string[]>();
-  const CHUNK = 150;
+  if (projectIds.length === 0) return byProject;
 
-  for (let i = 0; i < projectIds.length; i += CHUNK) {
-    const slice = projectIds.slice(i, i + CHUNK);
-    const links = await allRows('work list clients', (from, to) =>
-      db
+  const wanted = new Set(projectIds);
+  const fetchAll = projectIds.length > FETCH_ALL_ABOVE;
+  const CHUNK = 150;
+  const batches: Array<string[] | null> = fetchAll
+    ? [null]
+    : Array.from({ length: Math.ceil(projectIds.length / CHUNK) }, (_, i) =>
+        projectIds.slice(i * CHUNK, (i + 1) * CHUNK),
+      );
+
+  for (const slice of batches) {
+    const links = await allRows('work list clients', (from, to) => {
+      const q = db
         .from('project_client_companies')
         .select('project_id, client_companies(company_name)')
-        .in('project_id', slice)
-        .range(from, to),
-    );
+        .range(from, to);
+      return slice === null ? q : q.in('project_id', slice);
+    });
+
     for (const link of links) {
       const pid = str(link.project_id);
       const company = str(((link.client_companies ?? {}) as Row).company_name);
-      if (!pid || !company) continue;
+      // When fetching unfiltered, most links belong to projects not on screen.
+      if (!pid || !company || !wanted.has(pid)) continue;
       const list = byProject.get(pid) ?? [];
       if (!list.includes(company)) list.push(company);
       byProject.set(pid, list);
@@ -169,10 +191,7 @@ function toTask(r: Row, clients: Map<string, string[]>): TaskRow {
 
   return {
     id: str(r.id),
-    // project_task_title is filled on 5,559 of 5,560; task_name is the
-    // fallback and the id the last resort, so a row is never blank and
-    // therefore never invisible in the list.
-    title: str(r.project_task_title) || str(r.task_name) || str(r.id),
+    title: taskTitle(str(r.project_task_title), str(r.task_name), str(project.name), str(r.id)),
     taskType: strArray(r.task_type),
     taskNumber: strArray(r.task_number),
     projectManagers,

@@ -1,9 +1,11 @@
 /**
- * Ordering and text-filtering the work list.
+ * The work list's pure presentation logic — what a row is called, what colour
+ * its phase is, and how rows are ordered and filtered.
  *
- * In a module rather than in the page, for the same reason as project-sort:
- * logic inside an .astro file cannot be called by a test, and "it's obviously
- * fine" is said most often about small things.
+ * Separate from tasks.ts, which fetches, because that imports auth.ts and so
+ * reads import.meta.env at module load. Under plain Node that is undefined,
+ * which takes the whole import down and makes anything reachable only through
+ * tasks.ts untestable. Everything here is a plain function over plain data.
  */
 import type { TaskRow } from './tasks.ts';
 
@@ -195,4 +197,43 @@ export function filterTasks(rows: TaskRow[], query: string): TaskRow[] {
       .toLowerCase()
       .includes(q),
   );
+}
+
+/**
+ * What to call a task.
+ *
+ * project_task_title alone is not enough, and not by a little. On 2,979 of
+ * 5,560 rows it is simply the project's own name, so using it as the title
+ * left 3,191 rows sharing a title with another task on the same project —
+ * more than half the table, where two rows reading "Columbia Place" differed
+ * only by a date in another column. Adding task_name takes that to 65.
+ *
+ * Where project_task_title IS the project name it is dropped rather than
+ * repeated, because the project already has its own column; "Columbia Place
+ * — Columbia Place — 60% Design" helps nobody.
+ *
+ * The 65 that still collide are genuine repeats of one task name on one
+ * project; the task number chips and the due date separate those.
+ */
+export function taskTitle(
+  projectTaskTitle: string,
+  taskName: string,
+  projectName: string,
+  id: string,
+): string {
+  const parts: string[] = [];
+  const add = (v: string) => {
+    const t = v.trim();
+    if (!t) return;
+    if (parts.some((p) => p.toLowerCase() === t.toLowerCase())) return;
+    parts.push(t);
+  };
+
+  if (projectTaskTitle.trim().toLowerCase() !== projectName.trim().toLowerCase()) {
+    add(projectTaskTitle);
+  }
+  add(taskName);
+
+  // Never blank: a row with no title is a row nobody can click.
+  return parts.join(' — ') || projectTaskTitle.trim() || taskName.trim() || id;
 }

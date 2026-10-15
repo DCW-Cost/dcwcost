@@ -40,11 +40,25 @@ export const prerender = false;
 const params = Astro.url.searchParams;
 const q = (params.get('q') ?? '').trim();
 
-// `all` widens each filter rather than removing the control, so the page can
-// always say what it is showing. A filter you cannot see is the same problem
-// as a cap you cannot see.
-const workflowParam = params.get('workflow') ?? 'Complete';
-const windowParam = params.get('window') ?? '365';
+// EVERYTHING BY DEFAULT.
+//
+// The first version copied Airtable's own default — Phase II complete, due
+// within the past year. That is the right default for the view it came from,
+// which exists to manage live work. It is the wrong one here, because this
+// page answers "which task does this document belong to", and a job finished
+// two years ago still has a report worth reading.
+//
+// It also hid far more than it looked like. Across the ten pilot projects it
+// showed 18 of 81 tasks; the date window alone removed 26 of VFD
+// Replacement's 30 completed ones, and any task with no workflow phase set
+// was excluded outright.
+//
+// The cost is a bigger page: 5,560 rows, roughly 3.7 MB of HTML. That is the
+// honest trade — slower to load, but it contains what you came for. The
+// filters above narrow it, and `all` is a visible choice rather than the
+// absence of one, so the page can always say what it is showing.
+const workflowParam = params.get('workflow') ?? 'all';
+const windowParam = params.get('window') ?? 'all';
 const fileParam = params.get('file') ?? 'all';
 
 const workflow = workflowParam === 'all' ? null : workflowParam;
