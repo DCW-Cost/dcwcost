@@ -31,6 +31,7 @@ import {
   filterTasks,
   parseTaskSort,
   sortTasks,
+  workflowTone,
   type TaskSortKey,
 } from '../../../lib/intranet/task-sort.ts';
 
@@ -198,17 +199,27 @@ const WORKFLOW_CHOICES = [
                 : 'Nothing matches that search.'}
             </p>
           ) : (
-            <table class="grid">
+            <table class="grid resizable" id="tasktable">
               <thead>
                 <tr>
                   {COLUMNS.map((c) => (
-                    <th aria-sort={ariaSort(c.key)}>
+                    <th aria-sort={ariaSort(c.key)} data-col={c.key}>
                       <a href={sortHref(c.key)} class={sort === c.key ? 'sorted' : undefined}>
                         {c.label}
                         <span class="arrow" aria-hidden="true">
                           {sort === c.key ? (dir === 'asc' ? '▲' : '▼') : '↕'}
                         </span>
                       </a>
+                      {/* Separator role, not a button: it adjusts a value
+                          rather than performing an action, and that is what
+                          lets arrow keys work without hijacking Enter. */}
+                      <span
+                        class="grip"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`Resize ${c.label} column`}
+                        tabindex="0"
+                      />
                     </th>
                   ))}
                   <th><span class="vh">Upload</span></th>
@@ -247,7 +258,13 @@ const WORKFLOW_CHOICES = [
                       )}
                     </td>
                     <td>{t.dueDate ?? <i class="none">none</i>}</td>
-                    <td>{t.workflow ?? <i class="none">none</i>}</td>
+                    <td>
+                      {t.workflow ? (
+                        <span class={`chip wf-${workflowTone(t.workflow)}`}>{t.workflow}</span>
+                      ) : (
+                        <i class="none">none</i>
+                      )}
+                    </td>
                     <td>
                       {t.hasFile ? (
                         <span class="chip green">{t.ingestStatus}</span>
@@ -285,6 +302,105 @@ const WORKFLOW_CHOICES = [
     }
   </section>
 </IntranetLayout>
+
+<script is:inline>
+  (function () {
+    var table = document.getElementById('tasktable');
+    if (!table) return;
+
+    var KEY = 'dcw-tasks-colwidths';
+    var MIN = 70;
+
+    function load() {
+      try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }
+      catch (e) { return {}; }
+    }
+    function save(w) {
+      try { localStorage.setItem(KEY, JSON.stringify(w)); } catch (e) { /* blocked */ }
+    }
+
+    var widths = load();
+    var heads = table.querySelectorAll('th[data-col]');
+
+    // table-layout:fixed only once widths exist. Left to auto, the browser
+    // ignores a width set on one column and redistributes the rest, so the
+    // column you dragged snaps back and the others move instead.
+    function apply() {
+      var any = false;
+      for (var i = 0; i < heads.length; i++) {
+        var key = heads[i].getAttribute('data-col');
+        if (widths[key]) { heads[i].style.width = widths[key] + 'px'; any = true; }
+      }
+      table.style.tableLayout = any ? 'fixed' : '';
+    }
+    apply();
+
+    function startWidth(th) {
+      var key = th.getAttribute('data-col');
+      return widths[key] || th.getBoundingClientRect().width;
+    }
+
+    function setWidth(th, px) {
+      var key = th.getAttribute('data-col');
+      widths[key] = Math.max(MIN, Math.round(px));
+      apply();
+    }
+
+    for (var i = 0; i < heads.length; i++) {
+      (function (th) {
+        var grip = th.querySelector('.grip');
+        if (!grip) return;
+
+        grip.addEventListener('pointerdown', function (ev) {
+          ev.preventDefault();
+          // Freeze every column at its rendered width before the first move.
+          // Otherwise switching to fixed layout mid-drag reflows all of them
+          // at once and the whole table jumps under the cursor.
+          for (var j = 0; j < heads.length; j++) {
+            var k = heads[j].getAttribute('data-col');
+            if (!widths[k]) widths[k] = Math.round(heads[j].getBoundingClientRect().width);
+          }
+          var from = ev.clientX;
+          var base = startWidth(th);
+          grip.setPointerCapture(ev.pointerId);
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+
+          function move(e) { setWidth(th, base + (e.clientX - from)); }
+          function up(e) {
+            grip.releasePointerCapture(e.pointerId);
+            grip.removeEventListener('pointermove', move);
+            grip.removeEventListener('pointerup', up);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            save(widths);
+          }
+          grip.addEventListener('pointermove', move);
+          grip.addEventListener('pointerup', up);
+        });
+
+        // Keyboard: a drag handle reachable only by mouse is not reachable by
+        // everyone. Arrows nudge, Home resets this column.
+        grip.addEventListener('keydown', function (ev) {
+          var step = ev.shiftKey ? 40 : 10;
+          if (ev.key === 'ArrowLeft') { setWidth(th, startWidth(th) - step); }
+          else if (ev.key === 'ArrowRight') { setWidth(th, startWidth(th) + step); }
+          else if (ev.key === 'Home') { delete widths[th.getAttribute('data-col')]; apply(); }
+          else return;
+          ev.preventDefault();
+          save(widths);
+        });
+
+        grip.addEventListener('dblclick', function (ev) {
+          ev.preventDefault();
+          delete widths[th.getAttribute('data-col')];
+          apply();
+          save(widths);
+        });
+      })(heads[i]);
+    }
+  })();
+</script>
 
 <style>
   /* Only what the global stylesheet does not already provide. Colours come
@@ -362,6 +478,45 @@ const WORKFLOW_CHOICES = [
     gap: 0.5rem;
     align-items: center;
   }
+  /* Resize grips. The header cell is the positioning context; the grip sits
+     on its right edge, slightly wider than it looks so it is grabbable
+     without being fiddly. */
+  .grid.resizable th { position: relative; }
+  .grid.resizable th:last-child .grip { display: none; }
+  .grip {
+    position: absolute;
+    top: 0;
+    right: -4px;
+    width: 9px;
+    height: 100%;
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 1;
+  }
+  .grip::after {
+    content: '';
+    position: absolute;
+    top: 20%;
+    bottom: 20%;
+    left: 4px;
+    width: 1px;
+    background: var(--line-2);
+  }
+  .grip:hover::after,
+  .grip:focus-visible::after {
+    background: var(--blue);
+    top: 0;
+    bottom: 0;
+    width: 2px;
+  }
+  .grip:focus-visible { outline: none; }
+
+  /* Fixed layout truncates rather than wraps, so a dragged-narrow column
+     stays narrow instead of growing taller. The title cell is exempt — it is
+     the one people need to read in full. */
+  .grid.resizable td { overflow: hidden; text-overflow: ellipsis; }
+  .grid.resizable td .tasktitle { white-space: normal; }
+
   .vh {
     position: absolute;
     width: 1px;

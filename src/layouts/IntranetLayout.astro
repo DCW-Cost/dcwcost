@@ -74,6 +74,27 @@ try {
       href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap"
       rel="stylesheet"
     />
+    {/*
+      Applies the saved theme BEFORE first paint. Inline and synchronous on
+      purpose: anything deferred — a module script, an onload handler — runs
+      after the browser has already painted, so a person who chose light on a
+      dark-mode machine sees a dark flash on every single navigation. There is
+      no way to avoid that from an external file, which is why this one script
+      is inline.
+
+      No stored choice means no attribute, and CSS falls back to the OS.
+    */}
+    <script is:inline>
+      try {
+        var t = localStorage.getItem('dcw-theme');
+        if (t === 'light' || t === 'dark') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {
+        /* Private mode and blocked storage both throw here. The OS setting is
+           a perfectly good answer, so failing silently is correct. */
+      }
+    </script>
   </head>
   <body class="intranet">
     {

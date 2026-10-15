@@ -42,6 +42,64 @@ export const WORKFLOW_ORDER: readonly string[] = [
   'Complete',
 ];
 
+/**
+ * The tone each workflow state is shown in.
+ *
+ * Not invented here — Airtable already colours every one of these on the DCW
+ * Cost Plans table, and the team reads that view daily. Matching it means the
+ * two surfaces agree about what a colour means. Read from the field's choice
+ * list on 2026-10-15, including the shade within each family, because the
+ * shade is doing work: Complete is a dark grey chip and Draft Delivered is a
+ * barely-there one, which is how the list says "finished" versus "waiting"
+ * without you reading a word.
+ *
+ *   Docs Received - UNASSIGNED            yellowBright   nobody owns it
+ *   Docs Received - Assigned              greenLight2    owned, not started
+ *   Report / Takeoff Development          greenLight1    in progress
+ *   Quality Control                       greenLight1    in progress
+ *   Special Projects                      tealBright     outside the usual flow
+ *   Needs Revision -  Schedule TBD        redLight1      back, unscheduled
+ *   Needs Revision - Schedule Confirmed   redDark1       back, scheduled
+ *   Draft Delivered                       grayLight2     out for response
+ *   Pending Final Response                grayLight1     waiting on them
+ *   Complete                              grayDark1      done
+ *
+ * Development and Quality Control share a tone because Airtable gives them
+ * the same one. An unrecognised state gets the quietest tone rather than none,
+ * so a state Airtable grows later still renders as a chip.
+ */
+export type WorkflowTone =
+  | 'unassigned'
+  | 'assigned'
+  | 'active'
+  | 'special'
+  | 'revision-tbd'
+  | 'revision-set'
+  | 'delivered'
+  | 'waiting'
+  | 'done';
+
+const TONE: Record<string, WorkflowTone> = {
+  'Docs Received - UNASSIGNED': 'unassigned',
+  'Docs Received - Assigned': 'assigned',
+  'Report / Takeoff Development': 'active',
+  'Quality Control': 'active',
+  'Special Projects': 'special',
+  // NOTE THE DOUBLE SPACE after the dash. It is in Airtable, it is in the
+  // database, and a single-spaced key here would silently fall through to the
+  // fallback while looking correct in the source.
+  'Needs Revision -  Schedule TBD': 'revision-tbd',
+  'Needs Revision - Schedule Confirmed': 'revision-set',
+  'Draft Delivered': 'delivered',
+  'Pending Final Response': 'waiting',
+  Complete: 'done',
+};
+
+export function workflowTone(state: string | null): WorkflowTone {
+  if (state === null) return 'delivered';
+  return TONE[state] ?? 'delivered';
+}
+
 export function workflowRank(state: string | null): number {
   if (state === null) return WORKFLOW_ORDER.length + 1;
   const i = WORKFLOW_ORDER.indexOf(state);

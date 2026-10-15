@@ -12,31 +12,57 @@
    be confused with "this is a DCW-branded element".
    ============================================================ */
 
+/* ------------------------------------------------------------
+   Palette — one definition per colour, both themes.
+
+   light-dark() picks a value from `color-scheme`, so each colour is
+   written once instead of three times. The previous shape declared the
+   dark palette twice — once under prefers-color-scheme and once under
+   [data-theme="dark"] — and the two had to be kept in step by hand.
+   Four more rules below did the same. Nothing enforced it.
+
+   Hues follow Airtable, which is what the team reads all day: its blue,
+   near-white paper, pale grey rules and pastel chip fills. Dark mode is
+   neutral charcoal rather than navy, because Airtable has no dark mode
+   to copy and navy-on-navy was the thing that read as murky.
+
+   The toggle in the sidebar sets data-theme; absent it, the OS decides.
+   ------------------------------------------------------------ */
+
 :root {
-  --blue: #1e4d9b;
-  --blue-ink: #143a75;
-  --teal: #1f9e96;
-  --leaf: #6aa838;
+  color-scheme: light dark;
 
-  --ink: #131c2b;
-  --body: #37424f;
-  --muted: #67727f;
-  --faint: #97a1ad;
-  --app: #eef1f6;
-  --paper: #ffffff;
-  --sunk: #f5f7fb;
-  --line: #dde4ee;
-  --line-2: #c6d0e0;
+  --blue:     light-dark(#2d7ff9, #7cb0ff);
+  --blue-ink: light-dark(#1b63c9, #a9ccff);
+  --teal:     light-dark(#15b5a6, #4fd1c0);
+  --leaf:     light-dark(#5fb33c, #9ad96a);
 
-  --go: #3f8f2e;
-  --go-bg: #eaf6e6;
-  --go-line: #b9dfaa;
-  --hold: #b8791a;
-  --hold-bg: #fdf3e3;
-  --hold-line: #ecd0a0;
-  --stop: #b33636;
-  --stop-bg: #fceded;
-  --stop-line: #eebcbc;
+  --ink:    light-dark(#1d1f25, #e8eaed);
+  --body:   light-dark(#3d434d, #c3c7cd);
+  --muted:  light-dark(#616670, #8c9299);
+  --faint:  light-dark(#98a1ab, #6b7178);
+  --app:    light-dark(#f7f8f9, #15171a);
+  --paper:  light-dark(#ffffff, #1e2125);
+  --sunk:   light-dark(#f2f3f4, #191c1f);
+  --line:   light-dark(#e5e9ec, #2c3034);
+  --line-2: light-dark(#d6dade, #3c4147);
+
+  /* Semantic, and kept away from the accent on purpose: the confidence
+     gate must never read as "this is a DCW-branded element". Fills are
+     Airtable's pastels in light, deep and desaturated in dark. */
+  --go:        light-dark(#1f8c42, #6fd18a);
+  --go-bg:     light-dark(#d1f7c4, #15251a);
+  --go-line:   light-dark(#a9e596, #2c4733);
+  --hold:      light-dark(#b06f00, #e0b44f);
+  --hold-bg:   light-dark(#ffeab6, #272013);
+  --hold-line: light-dark(#f0d48a, #4a3d1f);
+  --stop:      light-dark(#c4314b, #f08a9c);
+  --stop-bg:   light-dark(#ffdce5, #2a171c);
+  --stop-line: light-dark(#f5b9c7, #4e2b33);
+
+  /* Text sitting ON a filled accent — white on blue in light, near-black
+     in dark where the accent is the lighter of the two. */
+  --on-accent: light-dark(#ffffff, #15171a);
 
   --brand: "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif;
   --ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -44,57 +70,9 @@
   --serif: "Source Serif 4", Georgia, serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --blue: #6f9ee0;
-    --blue-ink: #a8c6ee;
-    --teal: #4bc4bb;
-    --leaf: #97cf62;
-    --ink: #eef3fa;
-    --body: #c3ccd9;
-    --muted: #8b97a7;
-    --faint: #6d7887;
-    --app: #0a0f17;
-    --paper: #141c28;
-    --sunk: #101825;
-    --line: #26313f;
-    --line-2: #36414f;
-    --go: #7cc95f;
-    --go-bg: #16261a;
-    --go-line: #2f4a2c;
-    --hold: #e0a63f;
-    --hold-bg: #2a2113;
-    --hold-line: #4d3d1c;
-    --stop: #e37070;
-    --stop-bg: #2c1717;
-    --stop-line: #52292a;
-  }
-}
-
-:root[data-theme="dark"] {
-  --blue: #6f9ee0;
-  --blue-ink: #a8c6ee;
-  --teal: #4bc4bb;
-  --leaf: #97cf62;
-  --ink: #eef3fa;
-  --body: #c3ccd9;
-  --muted: #8b97a7;
-  --faint: #6d7887;
-  --app: #0a0f17;
-  --paper: #141c28;
-  --sunk: #101825;
-  --line: #26313f;
-  --line-2: #36414f;
-  --go: #7cc95f;
-  --go-bg: #16261a;
-  --go-line: #2f4a2c;
-  --hold: #e0a63f;
-  --hold-bg: #2a2113;
-  --hold-line: #4d3d1c;
-  --stop: #e37070;
-  --stop-bg: #2c1717;
-  --stop-line: #52292a;
-}
+/* The toggle. Without data-theme, color-scheme above follows the OS. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
 
 *,
 *::before,
@@ -118,10 +96,6 @@ body.intranet {
   font-size: 0.72rem;
   padding: 0.4rem 20px;
   text-align: center;
-}
-:root[data-theme="dark"] .fixture-strip { background: var(--paper); color: var(--muted); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .fixture-strip { background: var(--paper); color: var(--muted); }
 }
 
 /* ---------- Shell ---------- */
@@ -181,12 +155,10 @@ body.intranet {
 }
 .side nav a[aria-current="page"] {
   background: var(--blue);
-  color: #fff;
+  /* --blue is the LIGHTER colour in dark mode, so white here would be
+     unreadable. --on-accent flips with the theme. */
+  color: var(--on-accent);
   font-weight: 600;
-}
-:root[data-theme="dark"] .side nav a[aria-current="page"] { color: #0a0f17; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .side nav a[aria-current="page"] { color: #0a0f17; }
 }
 .side nav a:not([aria-current="page"]):hover { background: var(--sunk); color: var(--ink); }
 
@@ -200,9 +172,37 @@ body.intranet {
   padding: 0 0.35rem;
 }
 .side nav a[aria-current="page"] .badge {
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
+  background: light-dark(rgba(255, 255, 255, 0.22), rgba(0, 0, 0, 0.16));
+  color: var(--on-accent);
   border-color: transparent;
+}
+
+.themepick {
+  display: flex;
+  gap: 2px;
+  margin: 0 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px;
+  background: var(--paper);
+}
+.themepick button {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--ui);
+  font-size: 0.68rem;
+  padding: 3px 0;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.themepick button:hover { color: var(--ink); background: var(--sunk); }
+.themepick button[aria-pressed="true"] {
+  background: var(--blue);
+  color: var(--on-accent);
+  font-weight: 600;
 }
 
 .whoami {
@@ -307,12 +307,8 @@ main.app { padding: 0 0 4rem; min-width: 0; }
   display: inline-block;
 }
 .btn:hover { border-color: var(--blue); color: var(--blue); }
-.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-:root[data-theme="dark"] .btn.primary { color: #0a0f17; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .btn.primary { color: #0a0f17; }
-}
-.btn.primary:hover { background: var(--blue-ink); border-color: var(--blue-ink); color: #fff; }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: var(--on-accent); }
+.btn.primary:hover { background: var(--blue-ink); border-color: var(--blue-ink); color: var(--on-accent); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .btn.ghost:hover { background: var(--sunk); }
 .btn:focus-visible,
@@ -347,6 +343,45 @@ button:focus-visible {
 .chip.red { color: var(--stop); background: var(--stop-bg); border-color: var(--stop-line); }
 .chip.red .d { background: var(--stop); }
 .chip.excluded { color: var(--muted); background: var(--sunk); border-color: var(--line-2); }
+
+/* Workflow phase tones — Airtable's own colours for these states, shade and
+   all. See workflowTone() in task-sort.ts for the mapping and its source.
+
+   The shade carries meaning: within the grey family Complete is heaviest and
+   Draft Delivered lightest, so a scan of the column separates finished work
+   from work still out without reading a single label. Same within red —
+   a revision with a date confirmed is louder than one still unscheduled.
+
+   Airtable's "Bright" and "Dark1" fills are saturated and take light or very
+   dark text; its "Light1"/"Light2" fills are pastel and take their own hue
+   darkened. Dark mode inverts that: deep fill, light text. */
+.chip.wf-unassigned   { background: light-dark(#fcb400, #3a2e0e);
+                        border-color: light-dark(#e0a200, #5c4a17);
+                        color: light-dark(#4a3500, #f0c75a); }
+.chip.wf-assigned     { background: light-dark(#d1f7c4, #16271a);
+                        border-color: light-dark(#aee89b, #2b4530);
+                        color: light-dark(#1f6b33, #86d492); }
+.chip.wf-active       { background: light-dark(#93e088, #1b3320);
+                        border-color: light-dark(#6fcf64, #35583c);
+                        color: light-dark(#17552a, #93e088); }
+.chip.wf-special      { background: light-dark(#02b1a6, #0d2f2c);
+                        border-color: light-dark(#019a90, #1d4f49);
+                        color: light-dark(#ffffff, #4fd1c0); }
+.chip.wf-revision-tbd { background: light-dark(#ff9eb7, #381c25);
+                        border-color: light-dark(#f07f9c, #5a2d3a);
+                        color: light-dark(#7a1430, #ff9eb7); }
+.chip.wf-revision-set { background: light-dark(#ba1e45, #4a1324);
+                        border-color: light-dark(#9c1839, #6e1e36);
+                        color: light-dark(#ffffff, #f59ab0); }
+.chip.wf-delivered    { background: light-dark(#f2f3f4, #191c1f);
+                        border-color: light-dark(#e0e3e5, #2c3034);
+                        color: light-dark(#616670, #8c9299); }
+.chip.wf-waiting      { background: light-dark(#dcdfe2, #23272b);
+                        border-color: light-dark(#c6cace, #383d42);
+                        color: light-dark(#4a5057, #a8aeb5); }
+.chip.wf-done         { background: light-dark(#5f6670, #3a4047);
+                        border-color: light-dark(#4c525a, #4d545b);
+                        color: light-dark(#ffffff, #dfe3e7); }
 .chip.excluded .d { background: var(--faint); }
 
 /* ---------- Stat tiles ---------- */

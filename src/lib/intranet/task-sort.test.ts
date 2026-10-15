@@ -6,6 +6,7 @@ import {
   parseTaskSort,
   sortTasks,
   workflowRank,
+  workflowTone,
   WORKFLOW_ORDER,
 } from './task-sort.ts';
 
@@ -175,4 +176,62 @@ test('a query cannot match across two different fields', () => {
 test('an empty query returns everything, and the same array contents', () => {
   const rows = [task({ id: 'a', title: 'A' }), task({ id: 'b', title: 'B' })];
   assert.deepEqual(filterTasks(rows, '   ').map((t) => t.id), ['a', 'b']);
+});
+
+/**
+ * Airtable's own colour for each state, shade included. If these drift apart,
+ * the same job reads as two different situations depending on which tool you
+ * opened.
+ */
+test('every workflow state gets the tone and shade Airtable gives it', () => {
+  assert.equal(workflowTone('Docs Received - UNASSIGNED'), 'unassigned');
+  assert.equal(workflowTone('Docs Received - Assigned'), 'assigned');
+  assert.equal(workflowTone('Report / Takeoff Development'), 'active');
+  assert.equal(workflowTone('Quality Control'), 'active');
+  assert.equal(workflowTone('Special Projects'), 'special');
+  assert.equal(workflowTone('Needs Revision - Schedule Confirmed'), 'revision-set');
+  assert.equal(workflowTone('Draft Delivered'), 'delivered');
+  assert.equal(workflowTone('Pending Final Response'), 'waiting');
+  assert.equal(workflowTone('Complete'), 'done');
+});
+
+/**
+ * Within a family the shade is the signal, so these must NOT collapse:
+ * Complete is heavier than Draft Delivered, and a scheduled revision is
+ * louder than an unscheduled one.
+ */
+test('shades within a family stay distinct', () => {
+  const greys = ['Draft Delivered', 'Pending Final Response', 'Complete'].map(workflowTone);
+  assert.equal(new Set(greys).size, 3);
+
+  assert.notEqual(
+    workflowTone('Needs Revision -  Schedule TBD'),
+    workflowTone('Needs Revision - Schedule Confirmed'),
+  );
+  assert.notEqual(
+    workflowTone('Docs Received - Assigned'),
+    workflowTone('Report / Takeoff Development'),
+  );
+});
+
+/**
+ * The state is spelled with TWO spaces after the dash in Airtable, and so in
+ * the database. A single-spaced key in the map would look right in the source
+ * and silently fall through to the quietest tone — a revision needing
+ * scheduling would render as calmly as a delivered draft.
+ */
+test('the double-spaced revision state is matched exactly, not approximately', () => {
+  assert.equal(workflowTone('Needs Revision -  Schedule TBD'), 'revision-tbd');
+  assert.equal(workflowTone('Needs Revision - Schedule TBD'), 'delivered');
+});
+
+test('every state in the production enum has its own tone, bar the one pair Airtable shares', () => {
+  const tones = WORKFLOW_ORDER.map(workflowTone);
+  // 10 states, 9 tones: Development and Quality Control share one in Airtable.
+  assert.equal(new Set(tones).size, 9);
+});
+
+test('an unknown or absent state still gets a tone, so it renders as a chip', () => {
+  assert.equal(workflowTone('Some New State Airtable Grew'), 'delivered');
+  assert.equal(workflowTone(null), 'delivered');
 });
