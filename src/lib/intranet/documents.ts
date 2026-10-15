@@ -147,7 +147,19 @@ export async function listDocuments(
       // runtime refusal from PostgREST.
       'id, original_filename, status, uploaded_at, byte_size, issue_date, estimator_id, people!deliverables_estimator_id_fkey(name), upload_notes, storage_path, airtable_record_id'
     )
-    .eq('source', 'upload')
+    // "Has a file", not "was created by an upload".
+    //
+    // source='upload' meant the row was CREATED by this page. Attaching to a
+    // task from the work list does not create a row — it fills in the upload
+    // columns on one the sync already mirrored, which keeps source='airtable'
+    // and is the entire reason nothing gets orphaned any more.
+    //
+    // So the old filter hid every document uploaded the new way. The first
+    // real upload landed, failed its read, and could not be retried because
+    // the list it needed a button from showed 0 rows while 1 document had a
+    // file. uploaded_at is the signal that a person put it there; it is set
+    // on both paths.
+    .not('uploaded_at', 'is', null)
     .order('uploaded_at', { ascending: false })
     .limit(200);
 
